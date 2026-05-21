@@ -108,23 +108,23 @@ body {
   position: relative;
 }
 
-.loading-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 4rem;
-  background: rgba(15, 20, 25, 0.75);
-  pointer-events: none;
+.btn-retry-sync {
+  margin-left: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+  vertical-align: middle;
 }
 
-.loading-overlay__text {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-muted);
+.btn-retry-sync:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .toolbar {

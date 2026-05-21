@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <link rel="stylesheet" href="styles.css?v=6" />
   </head>
   <body>
     <div id="configBanner" class="config-banner" hidden>
@@ -29,7 +29,8 @@
         <h1>Zero Synergy Team Availability</h1>
         <p class="header__subtitle">
           Verfügbarkeit 13:00–22:00 Uhr
-          <span id="syncStatus" class="sync-status sync-status--connecting">Verbinde…</span>
+          <span id="syncStatus" class="sync-status sync-status--connecting">Laden…</span>
+          <button type="button" class="btn-retry-sync" id="retrySync" hidden>Erneut verbinden</button>
         </p>
       </div>
       <div class="toolbar">
@@ -89,9 +90,6 @@
     </header>
 
     <div class="main-wrap">
-      <div id="loadingOverlay" class="loading-overlay" hidden>
-        <p class="loading-overlay__text">Verbinde…</p>
-      </div>
       <main class="main" id="schedule"></main>
     </div>
 
@@ -105,7 +103,7 @@
 
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
-    <script src="firebase-config.js?v=5"></script>
-    <script src="app.js?v=5"></script>
+    <script src="firebase-config.js?v=6"></script>
+    <script src="app.js?v=6"></script>
   </body>
 </html>
