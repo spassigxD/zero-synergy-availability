@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zero Synergy — Team Comps</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css?v=12" />
+  </head>
+  <body>
+    <div id="configBanner" class="config-banner" hidden>
+      <strong>Firebase nicht konfiguriert</strong> — Comps werden nur in diesem Browser
+      gespeichert (nicht teamweit).
+    </div>
+
+    <div class="site-header">
+      <h1 class="site-header__team">Zero Synergy</h1>
+      <nav class="site-nav" aria-label="Hauptnavigation">
+        <a href="index.html" class="site-nav__link">Availability</a>
+        <a href="team-comps.html" class="site-nav__link is-active">Team Comps</a>
+      </nav>
+    </div>
+
+    <header class="header">
+      <div class="header__brand">
+        <h2 class="header__page-title">Team Comps</h2>
+        <p class="header__subtitle">
+          Agenten pro Map &amp; Spieler (max. 3)
+          <span id="syncStatus" class="sync-status sync-status--connecting">Laden…</span>
+          <button type="button" class="btn-retry-sync" id="retrySync" hidden>Erneut verbinden</button>
+        </p>
+      </div>
+      <div class="toolbar">
+        <button
+          type="button"
+          class="btn-edit"
+          id="toggleEdit"
+          aria-pressed="false"
+        >
+          Bearbeiten
+        </button>
+        <button type="button" class="btn-secondary" id="resetAll" hidden>
+          Alle Comps zurücksetzen
+        </button>
+      </div>
+    </header>
+
+    <div class="comps-layout" id="compsLayout">
+      <aside class="comps-sidebar" aria-label="Agenten">
+        <div class="comps-sidebar__head">
+          <h3 class="comps-sidebar__title">Agenten</h3>
+          <p class="comps-sidebar__hint" id="agentCount"></p>
+        </div>
+        <input
+          type="search"
+          class="comps-sidebar__search"
+          id="agentSearch"
+          placeholder="Agent suchen…"
+          autocomplete="off"
+        />
+        <ul class="comps-agent-list" id="agentList"></ul>
+      </aside>
+
+      <div class="comps-main-wrap">
+        <main class="comps-main">
+          <div class="comps-map-card">
+            <div class="comps-map-card__scroll">
+              <div class="comps-grid" id="compsGrid"></div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <p id="compsFooterHint">
+        Team-Comps pro Map und Spieler — zum Bearbeiten auf <strong>Bearbeiten</strong> klicken.
+      </p>
+    </footer>
+
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+    <script src="firebase-config.js?v=9"></script>
+    <script src="team-comps.js?v=11"></script>
+  </body>
+</html>

@@ -1,11 +1,11 @@
 /**
- * Firebase-Web-Config (Vorlage).
- * Kopiere diese Datei nach firebase-config.js und trage deine Werte aus der Firebase Console ein.
- * Siehe SETUP-FIREBASE.md
+ * Beispiel — echte Werte aus Firebase Console (Projekteinstellungen → Deine Apps → Web).
+ * Kopieren: cp firebase-config.example.js firebase-config.js (oder Werte in bestehende Datei)
+ * Siehe SETUP-FIREBASE.md und firebase-config.TEMPLATE.js
  */
 window.FIREBASE_CONFIG = {
   apiKey: "AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-  authDomain: "dein-projekt.firebaseapp.com",
-  databaseURL: "https://dein-projekt-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "dein-projekt",
+  authDomain: "zero-synergy.firebaseapp.com",
+  databaseURL: "https://zero-synergy-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "zero-synergy",
 };

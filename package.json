@@ -1,0 +1,24 @@
+{
+  "name": "bge-team-availability",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spassigxD/zero-synergy-availability.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/spassigxD/zero-synergy-availability/issues"
+  },
+  "homepage": "https://github.com/spassigxD/zero-synergy-availability#readme",
+  "dependencies": {
+    "firebase": "^12.13.0"
+  }
+}
