@@ -10,13 +10,27 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=2" />
+    <link rel="stylesheet" href="styles.css?v=3" />
   </head>
   <body>
+    <div id="configBanner" class="config-banner" hidden>
+      <strong>Firebase nicht konfiguriert</strong> — siehe
+      <a
+        href="https://github.com/spassigxD/zero-synergy-availability/blob/master/SETUP-FIREBASE.md"
+        target="_blank"
+        rel="noopener"
+        >SETUP-FIREBASE.md</a
+      >. Der Plan wird nur in diesem Browser
+      gespeichert (nicht teamweit).
+    </div>
+
     <header class="header">
       <div class="header__brand">
         <h1>Zero Synergy Team Availability</h1>
-        <p class="header__subtitle">Verfügbarkeit 13:00–22:00 Uhr</p>
+        <p class="header__subtitle">
+          Verfügbarkeit 13:00–22:00 Uhr
+          <span id="syncStatus" class="sync-status sync-status--connecting">Verbinde…</span>
+        </p>
       </div>
       <div class="toolbar">
         <span class="toolbar__label">Farbe wählen:</span>
@@ -74,15 +88,24 @@
       </div>
     </header>
 
-    <main class="main" id="schedule"></main>
+    <div class="main-wrap">
+      <div id="loadingOverlay" class="loading-overlay" hidden>
+        <p class="loading-overlay__text">Verbinde…</p>
+      </div>
+      <main class="main" id="schedule"></main>
+    </div>
 
     <footer class="footer">
       <p>
-        Zelle anklicken oder mit gedrückter Maustaste über mehrere Zellen ziehen. Änderungen werden
-        in diesem Browser gespeichert (nicht teamweit synchron).
+        Zelle anklicken oder mit gedrückter Maustaste über mehrere Zellen ziehen. Der Plan wird
+        <strong>live für das ganze Team</strong> synchronisiert (Firebase), sobald Firebase in
+        <code>firebase-config.js</code> eingerichtet ist.
       </p>
     </footer>
 
-    <script src="app.js?v=2"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+    <script src="firebase-config.js?v=3"></script>
+    <script src="app.js?v=3"></script>
   </body>
 </html>

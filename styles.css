@@ -59,6 +59,69 @@ body {
   color: var(--text-muted);
 }
 
+.sync-status {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.sync-status--connecting {
+  color: var(--text-muted);
+  background: rgba(139, 156, 179, 0.15);
+}
+
+.sync-status--live {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.sync-status--offline {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.config-banner {
+  padding: 0.75rem 1.5rem;
+  background: rgba(234, 179, 8, 0.15);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.35);
+  color: #fde68a;
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.config-banner a {
+  color: #fef08a;
+  font-weight: 600;
+}
+
+.main-wrap {
+  position: relative;
+}
+
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 4rem;
+  background: rgba(15, 20, 25, 0.75);
+  pointer-events: none;
+}
+
+.loading-overlay__text {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

@@ -16,15 +16,40 @@ for (let h = 13; h <= 22; h++) {
 }
 
 const STORAGE_KEY = "zero-synergy-availability-v1";
+const FIREBASE_GRID_PATH = "teams/zero-synergy/grid";
+const WRITE_DEBOUNCE_MS = 150;
+
+const PLACEHOLDER_MARKERS = [
+  "YOUR_API_KEY_HERE",
+  "YOUR_PROJECT_ID",
+  "YOUR_DATABASE_URL",
+];
 
 let selectedColor = "green";
-let grid = loadGrid();
+let grid = {};
 let isPainting = false;
 let hasDragged = false;
 let paintStartCell = null;
 let paintOriginColor = null;
 
-function loadGrid() {
+let useFirebase = false;
+let gridRef = null;
+let applyingRemote = false;
+let hasReceivedFirstSnapshot = false;
+let migrationAttempted = false;
+let writeDebounceTimer = null;
+let scheduleBuilt = false;
+
+function isFirebaseConfigured() {
+  const cfg = window.firebaseConfig;
+  if (!cfg || typeof cfg !== "object") return false;
+  const values = [cfg.apiKey, cfg.authDomain, cfg.databaseURL, cfg.projectId];
+  if (values.some((v) => !v || typeof v !== "string")) return false;
+  const combined = values.join(" ");
+  return !PLACEHOLDER_MARKERS.some((m) => combined.includes(m));
+}
+
+function loadGridFromLocalStorage() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -37,7 +62,7 @@ function loadGrid() {
   return {};
 }
 
-function saveGrid() {
+function saveGridToLocalStorage() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(grid));
 }
 
@@ -49,6 +74,32 @@ function getCell(dayId, time, player) {
   return grid[cellKey(dayId, time, player)] ?? null;
 }
 
+function setSyncStatus(text, state) {
+  const el = document.getElementById("syncStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove("sync-status--live", "sync-status--offline", "sync-status--connecting");
+  if (state) el.classList.add(`sync-status--${state}`);
+}
+
+function setLoadingVisible(visible) {
+  const el = document.getElementById("loadingOverlay");
+  if (el) el.hidden = !visible;
+}
+
+function showConfigBanner(show) {
+  const el = document.getElementById("configBanner");
+  if (el) el.hidden = !show;
+}
+
+function scheduleFirebaseWrite() {
+  if (!useFirebase || !gridRef || applyingRemote) return;
+  clearTimeout(writeDebounceTimer);
+  writeDebounceTimer = setTimeout(() => {
+    gridRef.set(grid).catch(() => setSyncStatus("Offline", "offline"));
+  }, WRITE_DEBOUNCE_MS);
+}
+
 function setCell(dayId, time, player, color) {
   const key = cellKey(dayId, time, player);
   if (color) {
@@ -56,7 +107,108 @@ function setCell(dayId, time, player, color) {
   } else {
     delete grid[key];
   }
-  saveGrid();
+  if (useFirebase) {
+    scheduleFirebaseWrite();
+  } else {
+    saveGridToLocalStorage();
+  }
+}
+
+function refreshAllCellsUI() {
+  document.querySelectorAll(".schedule-cell").forEach((cell) => {
+    const { day, time, player } = cell.dataset;
+    updateCellUI(cell, getCell(day, time, player));
+  });
+}
+
+function applyRemoteGrid(data) {
+  applyingRemote = true;
+  grid = data && typeof data === "object" ? data : {};
+  if (scheduleBuilt) {
+    refreshAllCellsUI();
+  } else {
+    buildSchedule();
+    scheduleBuilt = true;
+  }
+  applyingRemote = false;
+}
+
+function tryMigrateLocalToFirebase(snapshotEmpty) {
+  if (!useFirebase || !gridRef || migrationAttempted || !snapshotEmpty) return;
+  migrationAttempted = true;
+  const local = loadGridFromLocalStorage();
+  if (Object.keys(local).length === 0) return;
+  gridRef.set(local).catch(() => {
+    migrationAttempted = false;
+  });
+}
+
+function initFirebase() {
+  if (typeof firebase === "undefined") {
+    initLocalOnly(true);
+    return;
+  }
+  try {
+    firebase.initializeApp(window.firebaseConfig);
+    const db = firebase.database();
+    gridRef = db.ref(FIREBASE_GRID_PATH);
+    useFirebase = true;
+    setSyncStatus("Verbinde…", "connecting");
+    setLoadingVisible(true);
+
+    gridRef.on(
+      "value",
+      (snapshot) => {
+        const data = snapshot.val();
+        const isEmpty =
+          data === null ||
+          (typeof data === "object" && Object.keys(data).length === 0);
+
+        if (!hasReceivedFirstSnapshot) {
+          hasReceivedFirstSnapshot = true;
+          setLoadingVisible(false);
+          if (isEmpty) {
+            tryMigrateLocalToFirebase(true);
+            const local = loadGridFromLocalStorage();
+            if (Object.keys(local).length > 0) return;
+          }
+        }
+
+        applyRemoteGrid(isEmpty ? {} : data);
+        setSyncStatus("Live · synchronisiert", "live");
+      },
+      () => {
+        setLoadingVisible(false);
+        setSyncStatus("Offline", "offline");
+        if (!scheduleBuilt) {
+          grid = loadGridFromLocalStorage();
+          buildSchedule();
+          scheduleBuilt = true;
+        }
+      }
+    );
+
+    db.ref(".info/connected").on("value", (snap) => {
+      if (!hasReceivedFirstSnapshot) return;
+      if (snap.val() === true) {
+        setSyncStatus("Live · synchronisiert", "live");
+      } else {
+        setSyncStatus("Offline", "offline");
+      }
+    });
+  } catch {
+    initLocalOnly(true);
+  }
+}
+
+function initLocalOnly(showBanner) {
+  useFirebase = false;
+  showConfigBanner(showBanner);
+  grid = loadGridFromLocalStorage();
+  setSyncStatus("Offline (nur dieser Browser)", "offline");
+  setLoadingVisible(false);
+  buildSchedule();
+  scheduleBuilt = true;
 }
 
 function buildSchedule() {
@@ -240,7 +392,11 @@ document.getElementById("resetAll").addEventListener("click", () => {
     return;
   }
   grid = {};
-  saveGrid();
+  if (useFirebase && gridRef) {
+    gridRef.set(null).catch(() => setSyncStatus("Offline", "offline"));
+  } else {
+    saveGridToLocalStorage();
+  }
   buildSchedule();
 });
 
@@ -250,4 +406,10 @@ document.addEventListener("touchcancel", stopPainting);
 document.addEventListener("touchmove", onTouchMove, { passive: false });
 
 initColorPalette();
-buildSchedule();
+
+if (isFirebaseConfigured()) {
+  showConfigBanner(false);
+  initFirebase();
+} else {
+  initLocalOnly(true);
+}
