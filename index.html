@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zero Synergy Team Availability</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="header__brand">
+        <h1>Zero Synergy Team Availability</h1>
+        <p class="header__subtitle">Verfügbarkeit 13:00–22:00 Uhr</p>
+      </div>
+      <div class="toolbar">
+        <span class="toolbar__label">Farbe wählen:</span>
+        <div class="color-palette" role="group" aria-label="Verfügbarkeitsfarben">
+          <button
+            type="button"
+            class="color-btn color-btn--green is-active"
+            data-color="green"
+            aria-pressed="true"
+            title="Verfügbar"
+          >
+            <span class="color-btn__swatch"></span>
+            <span>Grün</span>
+          </button>
+          <button
+            type="button"
+            class="color-btn color-btn--yellow"
+            data-color="yellow"
+            aria-pressed="false"
+            title="Vielleicht"
+          >
+            <span class="color-btn__swatch"></span>
+            <span>Gelb</span>
+          </button>
+          <button
+            type="button"
+            class="color-btn color-btn--red"
+            data-color="red"
+            aria-pressed="false"
+            title="Nicht verfügbar"
+          >
+            <span class="color-btn__swatch"></span>
+            <span>Rot</span>
+          </button>
+          <button type="button" class="color-btn color-btn--erase" data-color="erase" title="Zelle leeren">
+            <span class="color-btn__swatch color-btn__swatch--erase"></span>
+            <span>Löschen</span>
+          </button>
+        </div>
+        <button type="button" class="btn-secondary" id="resetAll">Alles zurücksetzen</button>
+      </div>
+      <div class="legend">
+        <div class="legend__item">
+          <span class="legend__dot legend__dot--green"></span>
+          Verfügbar
+        </div>
+        <div class="legend__item">
+          <span class="legend__dot legend__dot--yellow"></span>
+          Vielleicht / teilweise
+        </div>
+        <div class="legend__item">
+          <span class="legend__dot legend__dot--red"></span>
+          Nicht verfügbar
+        </div>
+      </div>
+    </header>
+
+    <main class="main" id="schedule"></main>
+
+    <footer class="footer">
+      <p>Zelle anklicken oder mit gedrückter Maustaste über mehrere Zellen ziehen. Änderungen werden automatisch gespeichert.</p>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
