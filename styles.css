@@ -248,7 +248,7 @@ body {
 
 .schedule-grid {
   display: grid;
-  grid-template-columns: 72px repeat(6, minmax(88px, 1fr));
+  grid-template-columns: 72px repeat(7, minmax(88px, 1fr));
   min-width: 640px;
 }
 

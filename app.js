@@ -1,4 +1,4 @@
-const PLAYERS = ["Joletsgoo", "spassig", "stefan", "horus", "Haidew", "Pascal"];
+const PLAYERS = ["Joletsgoo", "spassig", "stefan", "horus", "Haidew", "Pascal", "Keena"];
 
 const DAYS = [
   { id: "monday", label: "Monday", class: "monday" },
