@@ -75,6 +75,7 @@ function buildSchedule() {
     main.appendChild(card);
 
     const gridEl = card.querySelector(".schedule-grid");
+    gridEl.style.gridTemplateColumns = `72px repeat(${PLAYERS.length}, minmax(88px, 1fr))`;
 
     const timeHead = document.createElement("div");
     timeHead.className = "schedule-grid__head schedule-grid__head--time";
