@@ -18,6 +18,7 @@ for (let h = 13; h <= 22; h++) {
 const STORAGE_KEY = "zero-synergy-availability-v1";
 const MIGRATION_KEY = "zero-synergy-firebase-migrated-v1";
 const FIREBASE_GRID_PATH = "teams/zero-synergy/grid";
+const FIREBASE_CONNECT_TIMEOUT_MS = 10000;
 
 let selectedColor = "green";
 let grid = {};
@@ -29,6 +30,8 @@ let paintOriginColor = null;
 let useFirebase = false;
 let dbRef = null;
 let firebaseReady = false;
+let firebaseBootstrapped = false;
+let firebaseConnectTimer = null;
 let saveTimer = null;
 let lastPushedJson = null;
 
@@ -69,7 +72,12 @@ function persistGrid() {
     dbRef
       .set(grid)
       .then(() => setSyncStatus("live"))
-      .catch(() => setSyncStatus("offline"));
+      .catch((err) => {
+        console.error("[firebase] write failed", err?.code, err?.message);
+        setSyncStatus(
+          err?.code === "PERMISSION_DENIED" ? "error-rules" : "offline"
+        );
+      });
   } else {
     saveGridToLocalStorage();
   }
@@ -79,6 +87,7 @@ function setSyncStatus(mode) {
   const el = document.getElementById("syncStatus");
   if (!el) return;
   el.className = "sync-status";
+  el.removeAttribute("title");
   if (mode === "loading") {
     el.textContent = "Verbinde…";
     el.classList.add("sync-status--connecting");
@@ -88,6 +97,13 @@ function setSyncStatus(mode) {
   } else if (mode === "offline") {
     el.textContent = "Offline";
     el.classList.add("sync-status--offline");
+    el.title =
+      "Keine Verbindung zur Realtime Database. Prüfe Regeln in der Firebase Console (Veröffentlichen) und die Netzwerkverbindung.";
+  } else if (mode === "error-rules") {
+    el.textContent = "Zugriff verweigert";
+    el.classList.add("sync-status--offline");
+    el.title =
+      "Prüfe Realtime Database Regeln in Firebase Console (teams/zero-synergy) und klicke Veröffentlichen.";
   } else if (mode === "local") {
     el.textContent = "Nur lokal";
     el.classList.add("sync-status--local");
@@ -320,63 +336,147 @@ function initLocalOnly() {
   buildSchedule();
 }
 
+function getFirebaseApp() {
+  if (firebase.apps.length > 0) return firebase.app();
+  return firebase.initializeApp(window.FIREBASE_CONFIG);
+}
+
+async function fetchGridViaRest() {
+  const base = String(window.FIREBASE_CONFIG.databaseURL).replace(/\/$/, "");
+  const url = `${base}/${FIREBASE_GRID_PATH}.json`;
+  const res = await fetch(url);
+  if (res.status === 404) {
+    const err = new Error("database_not_found");
+    err.code = "DATABASE_NOT_FOUND";
+    throw err;
+  }
+  if (!res.ok) {
+    const err = new Error(`http_${res.status}`);
+    err.code = res.status === 401 || res.status === 403 ? "PERMISSION_DENIED" : "HTTP_ERROR";
+    throw err;
+  }
+  const data = await res.json();
+  return data && typeof data === "object" ? data : {};
+}
+
+function applyInitialRemoteGrid(remote) {
+  const remoteGrid = remote && typeof remote === "object" ? remote : {};
+  const hasRemote = Object.keys(remoteGrid).length > 0;
+  const localGrid = loadGridFromLocalStorage();
+  const hasLocal = Object.keys(localGrid).length > 0;
+  const migrated = localStorage.getItem(MIGRATION_KEY);
+
+  if (!hasRemote && hasLocal && !migrated) {
+    grid = { ...localGrid };
+    localStorage.setItem(MIGRATION_KEY, "1");
+    persistGrid();
+  } else {
+    grid = remoteGrid;
+    if (hasRemote) localStorage.setItem(MIGRATION_KEY, "1");
+  }
+}
+
+function clearFirebaseConnectTimer() {
+  if (firebaseConnectTimer) {
+    clearTimeout(firebaseConnectTimer);
+    firebaseConnectTimer = null;
+  }
+}
+
+function unlockFirebaseSchedule() {
+  firebaseReady = true;
+  setScheduleLocked(false);
+  buildSchedule();
+}
+
+function finishFirebaseBootstrap(remote, source) {
+  if (firebaseBootstrapped) return;
+  firebaseBootstrapped = true;
+  clearFirebaseConnectTimer();
+  applyInitialRemoteGrid(remote);
+  unlockFirebaseSchedule();
+  setSyncStatus("live");
+  console.info("[firebase] connected via", source);
+}
+
+function failFirebaseStartup(err) {
+  clearFirebaseConnectTimer();
+  console.error("[firebase] startup failed", err?.code, err?.message || err);
+
+  const isRules =
+    err?.code === "PERMISSION_DENIED" ||
+    err?.code === "permission_denied";
+  if (!firebaseBootstrapped) {
+    firebaseBootstrapped = true;
+    grid = loadGridFromLocalStorage();
+    unlockFirebaseSchedule();
+  }
+  setSyncStatus(isRules ? "error-rules" : "offline");
+}
+
 function initFirebase() {
   useFirebase = true;
+  firebaseBootstrapped = false;
   setBannerVisible(false);
   setSyncStatus("loading");
   setScheduleLocked(true);
 
   try {
-    firebase.initializeApp(window.FIREBASE_CONFIG);
-    const db = firebase.database();
+    const app = getFirebaseApp();
+    const db = firebase.database(app);
     dbRef = db.ref(FIREBASE_GRID_PATH);
 
-    let firstSnapshot = true;
+    db.ref(".info/connected").on("value", (snap) => {
+      if (snap.val() === true) {
+        console.info("[firebase] websocket connected");
+      }
+    });
+
+    firebaseConnectTimer = setTimeout(async () => {
+      if (firebaseBootstrapped) return;
+      console.warn(
+        "[firebase] SDK timeout after",
+        FIREBASE_CONNECT_TIMEOUT_MS,
+        "ms — trying REST"
+      );
+      try {
+        const remote = await fetchGridViaRest();
+        finishFirebaseBootstrap(remote, "rest-timeout");
+      } catch (restErr) {
+        failFirebaseStartup(restErr);
+      }
+    }, FIREBASE_CONNECT_TIMEOUT_MS);
+
+    dbRef
+      .once("value")
+      .then((snapshot) => {
+        finishFirebaseBootstrap(snapshot.val(), "once");
+      })
+      .catch((err) => {
+        console.error("[firebase] once(value) failed", err?.code, err?.message);
+        failFirebaseStartup(err);
+      });
 
     dbRef.on(
       "value",
       (snapshot) => {
-        const remote = snapshot.val();
-
-        if (firstSnapshot) {
-          firstSnapshot = false;
-          const remoteGrid =
-            remote && typeof remote === "object" ? remote : {};
-          const hasRemote = Object.keys(remoteGrid).length > 0;
-          const localGrid = loadGridFromLocalStorage();
-          const hasLocal = Object.keys(localGrid).length > 0;
-          const migrated = localStorage.getItem(MIGRATION_KEY);
-
-          if (!hasRemote && hasLocal && !migrated) {
-            grid = { ...localGrid };
-            localStorage.setItem(MIGRATION_KEY, "1");
-            persistGrid();
-          } else {
-            grid = remoteGrid;
-            if (hasRemote) localStorage.setItem(MIGRATION_KEY, "1");
-          }
-
-          firebaseReady = true;
-          setScheduleLocked(false);
-          buildSchedule();
-          setSyncStatus("live");
+        if (!firebaseBootstrapped) return;
+        applyRemoteGrid(snapshot.val());
+      },
+      (err) => {
+        console.error("[firebase] on(value) error", err?.code, err?.message);
+        if (!firebaseBootstrapped) {
+          failFirebaseStartup(err);
           return;
         }
-
-        applyRemoteGrid(remote);
-      },
-      () => {
-        setSyncStatus("offline");
-        if (!firebaseReady) {
-          grid = loadGridFromLocalStorage();
-          firebaseReady = true;
-          setScheduleLocked(false);
-          buildSchedule();
-        }
+        setSyncStatus(
+          err?.code === "PERMISSION_DENIED" ? "error-rules" : "offline"
+        );
       }
     );
-  } catch {
-    setSyncStatus("offline");
+  } catch (err) {
+    console.error("[firebase] init exception", err);
+    clearFirebaseConnectTimer();
     initLocalOnly();
   }
 }
