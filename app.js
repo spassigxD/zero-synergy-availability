@@ -16,14 +16,8 @@ for (let h = 13; h <= 22; h++) {
 }
 
 const STORAGE_KEY = "zero-synergy-availability-v1";
+const MIGRATION_KEY = "zero-synergy-firebase-migrated-v1";
 const FIREBASE_GRID_PATH = "teams/zero-synergy/grid";
-const WRITE_DEBOUNCE_MS = 150;
-
-const PLACEHOLDER_MARKERS = [
-  "YOUR_API_KEY_HERE",
-  "YOUR_PROJECT_ID",
-  "YOUR_DATABASE_URL",
-];
 
 let selectedColor = "green";
 let grid = {};
@@ -33,20 +27,17 @@ let paintStartCell = null;
 let paintOriginColor = null;
 
 let useFirebase = false;
-let gridRef = null;
-let applyingRemote = false;
-let hasReceivedFirstSnapshot = false;
-let migrationAttempted = false;
-let writeDebounceTimer = null;
-let scheduleBuilt = false;
+let dbRef = null;
+let firebaseReady = false;
+let saveTimer = null;
+let lastPushedJson = null;
 
 function isFirebaseConfigured() {
-  const cfg = window.firebaseConfig;
-  if (!cfg || typeof cfg !== "object") return false;
-  const values = [cfg.apiKey, cfg.authDomain, cfg.databaseURL, cfg.projectId];
-  if (values.some((v) => !v || typeof v !== "string")) return false;
-  const combined = values.join(" ");
-  return !PLACEHOLDER_MARKERS.some((m) => combined.includes(m));
+  const c = window.FIREBASE_CONFIG;
+  if (!c || !c.apiKey || !c.databaseURL) return false;
+  if (c.apiKey === "DEIN_API_KEY" || String(c.apiKey).includes("DEIN")) return false;
+  if (String(c.databaseURL).includes("dein-projekt")) return false;
+  return true;
 }
 
 function loadGridFromLocalStorage() {
@@ -66,38 +57,59 @@ function saveGridToLocalStorage() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(grid));
 }
 
+function schedulePersist() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(persistGrid, 150);
+}
+
+function persistGrid() {
+  const json = JSON.stringify(grid);
+  if (useFirebase && dbRef) {
+    lastPushedJson = json;
+    dbRef
+      .set(grid)
+      .then(() => setSyncStatus("live"))
+      .catch(() => setSyncStatus("offline"));
+  } else {
+    saveGridToLocalStorage();
+  }
+}
+
+function setSyncStatus(mode) {
+  const el = document.getElementById("syncStatus");
+  if (!el) return;
+  el.className = "sync-status";
+  if (mode === "loading") {
+    el.textContent = "Verbinde…";
+    el.classList.add("sync-status--connecting");
+  } else if (mode === "live") {
+    el.textContent = "Live · synchronisiert";
+    el.classList.add("sync-status--live");
+  } else if (mode === "offline") {
+    el.textContent = "Offline";
+    el.classList.add("sync-status--offline");
+  } else if (mode === "local") {
+    el.textContent = "Nur lokal";
+    el.classList.add("sync-status--local");
+  }
+}
+
+function setBannerVisible(visible) {
+  const banner = document.getElementById("configBanner");
+  if (banner) banner.hidden = !visible;
+}
+
+function setScheduleLocked(locked) {
+  const overlay = document.getElementById("loadingOverlay");
+  if (overlay) overlay.hidden = !locked;
+}
+
 function cellKey(dayId, time, player) {
   return `${dayId}|${time}|${player}`;
 }
 
 function getCell(dayId, time, player) {
   return grid[cellKey(dayId, time, player)] ?? null;
-}
-
-function setSyncStatus(text, state) {
-  const el = document.getElementById("syncStatus");
-  if (!el) return;
-  el.textContent = text;
-  el.classList.remove("sync-status--live", "sync-status--offline", "sync-status--connecting");
-  if (state) el.classList.add(`sync-status--${state}`);
-}
-
-function setLoadingVisible(visible) {
-  const el = document.getElementById("loadingOverlay");
-  if (el) el.hidden = !visible;
-}
-
-function showConfigBanner(show) {
-  const el = document.getElementById("configBanner");
-  if (el) el.hidden = !show;
-}
-
-function scheduleFirebaseWrite() {
-  if (!useFirebase || !gridRef || applyingRemote) return;
-  clearTimeout(writeDebounceTimer);
-  writeDebounceTimer = setTimeout(() => {
-    gridRef.set(grid).catch(() => setSyncStatus("Offline", "offline"));
-  }, WRITE_DEBOUNCE_MS);
 }
 
 function setCell(dayId, time, player, color) {
@@ -107,108 +119,22 @@ function setCell(dayId, time, player, color) {
   } else {
     delete grid[key];
   }
-  if (useFirebase) {
-    scheduleFirebaseWrite();
-  } else {
-    saveGridToLocalStorage();
-  }
+  schedulePersist();
 }
 
-function refreshAllCellsUI() {
+function refreshAllCells() {
   document.querySelectorAll(".schedule-cell").forEach((cell) => {
     const { day, time, player } = cell.dataset;
     updateCellUI(cell, getCell(day, time, player));
   });
 }
 
-function applyRemoteGrid(data) {
-  applyingRemote = true;
-  grid = data && typeof data === "object" ? data : {};
-  if (scheduleBuilt) {
-    refreshAllCellsUI();
-  } else {
-    buildSchedule();
-    scheduleBuilt = true;
-  }
-  applyingRemote = false;
-}
-
-function tryMigrateLocalToFirebase(snapshotEmpty) {
-  if (!useFirebase || !gridRef || migrationAttempted || !snapshotEmpty) return;
-  migrationAttempted = true;
-  const local = loadGridFromLocalStorage();
-  if (Object.keys(local).length === 0) return;
-  gridRef.set(local).catch(() => {
-    migrationAttempted = false;
-  });
-}
-
-function initFirebase() {
-  if (typeof firebase === "undefined") {
-    initLocalOnly(true);
-    return;
-  }
-  try {
-    firebase.initializeApp(window.firebaseConfig);
-    const db = firebase.database();
-    gridRef = db.ref(FIREBASE_GRID_PATH);
-    useFirebase = true;
-    setSyncStatus("Verbinde…", "connecting");
-    setLoadingVisible(true);
-
-    gridRef.on(
-      "value",
-      (snapshot) => {
-        const data = snapshot.val();
-        const isEmpty =
-          data === null ||
-          (typeof data === "object" && Object.keys(data).length === 0);
-
-        if (!hasReceivedFirstSnapshot) {
-          hasReceivedFirstSnapshot = true;
-          setLoadingVisible(false);
-          if (isEmpty) {
-            tryMigrateLocalToFirebase(true);
-            const local = loadGridFromLocalStorage();
-            if (Object.keys(local).length > 0) return;
-          }
-        }
-
-        applyRemoteGrid(isEmpty ? {} : data);
-        setSyncStatus("Live · synchronisiert", "live");
-      },
-      () => {
-        setLoadingVisible(false);
-        setSyncStatus("Offline", "offline");
-        if (!scheduleBuilt) {
-          grid = loadGridFromLocalStorage();
-          buildSchedule();
-          scheduleBuilt = true;
-        }
-      }
-    );
-
-    db.ref(".info/connected").on("value", (snap) => {
-      if (!hasReceivedFirstSnapshot) return;
-      if (snap.val() === true) {
-        setSyncStatus("Live · synchronisiert", "live");
-      } else {
-        setSyncStatus("Offline", "offline");
-      }
-    });
-  } catch {
-    initLocalOnly(true);
-  }
-}
-
-function initLocalOnly(showBanner) {
-  useFirebase = false;
-  showConfigBanner(showBanner);
-  grid = loadGridFromLocalStorage();
-  setSyncStatus("Offline (nur dieser Browser)", "offline");
-  setLoadingVisible(false);
-  buildSchedule();
-  scheduleBuilt = true;
+function applyRemoteGrid(remote) {
+  const json = JSON.stringify(remote || {});
+  if (json === lastPushedJson) return;
+  grid = remote && typeof remote === "object" ? remote : {};
+  refreshAllCells();
+  setSyncStatus("live");
 }
 
 function buildSchedule() {
@@ -314,6 +240,7 @@ function applyToggle(cell, originColor) {
 }
 
 function startPainting(cell) {
+  if (!firebaseReady) return;
   isPainting = true;
   hasDragged = false;
   paintStartCell = cell;
@@ -383,6 +310,85 @@ function initColorPalette() {
   });
 }
 
+function initLocalOnly() {
+  useFirebase = false;
+  setBannerVisible(true);
+  setSyncStatus("local");
+  grid = loadGridFromLocalStorage();
+  firebaseReady = true;
+  setScheduleLocked(false);
+  buildSchedule();
+}
+
+function initFirebase() {
+  useFirebase = true;
+  setBannerVisible(false);
+  setSyncStatus("loading");
+  setScheduleLocked(true);
+
+  try {
+    firebase.initializeApp(window.FIREBASE_CONFIG);
+    const db = firebase.database();
+    dbRef = db.ref(FIREBASE_GRID_PATH);
+
+    let firstSnapshot = true;
+
+    dbRef.on(
+      "value",
+      (snapshot) => {
+        const remote = snapshot.val();
+
+        if (firstSnapshot) {
+          firstSnapshot = false;
+          const remoteGrid =
+            remote && typeof remote === "object" ? remote : {};
+          const hasRemote = Object.keys(remoteGrid).length > 0;
+          const localGrid = loadGridFromLocalStorage();
+          const hasLocal = Object.keys(localGrid).length > 0;
+          const migrated = localStorage.getItem(MIGRATION_KEY);
+
+          if (!hasRemote && hasLocal && !migrated) {
+            grid = { ...localGrid };
+            localStorage.setItem(MIGRATION_KEY, "1");
+            persistGrid();
+          } else {
+            grid = remoteGrid;
+            if (hasRemote) localStorage.setItem(MIGRATION_KEY, "1");
+          }
+
+          firebaseReady = true;
+          setScheduleLocked(false);
+          buildSchedule();
+          setSyncStatus("live");
+          return;
+        }
+
+        applyRemoteGrid(remote);
+      },
+      () => {
+        setSyncStatus("offline");
+        if (!firebaseReady) {
+          grid = loadGridFromLocalStorage();
+          firebaseReady = true;
+          setScheduleLocked(false);
+          buildSchedule();
+        }
+      }
+    );
+  } catch {
+    setSyncStatus("offline");
+    initLocalOnly();
+  }
+}
+
+function initSync() {
+  if (typeof firebase !== "undefined" && isFirebaseConfigured()) {
+    initFirebase();
+  } else {
+    initLocalOnly();
+  }
+}
+
 document.getElementById("resetAll").addEventListener("click", () => {
   if (
     !confirm(
@@ -392,11 +398,7 @@ document.getElementById("resetAll").addEventListener("click", () => {
     return;
   }
   grid = {};
-  if (useFirebase && gridRef) {
-    gridRef.set(null).catch(() => setSyncStatus("Offline", "offline"));
-  } else {
-    saveGridToLocalStorage();
-  }
+  persistGrid();
   buildSchedule();
 });
 
@@ -406,10 +408,4 @@ document.addEventListener("touchcancel", stopPainting);
 document.addEventListener("touchmove", onTouchMove, { passive: false });
 
 initColorPalette();
-
-if (isFirebaseConfigured()) {
-  showConfigBanner(false);
-  initFirebase();
-} else {
-  initLocalOnly(true);
-}
+initSync();
