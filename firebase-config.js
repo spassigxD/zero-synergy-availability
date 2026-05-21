@@ -1,10 +1,10 @@
 /**
- * Firebase-Web-Config — Platzhalter bis du dein Projekt angelegt hast.
- * Siehe SETUP-FIREBASE.md (ca. 5 Minuten).
+ * Firebase-Web-Config — Zero Synergy (znrgy-ccb87).
+ * Siehe SETUP-FIREBASE.md.
  */
 window.FIREBASE_CONFIG = {
-  apiKey: "DEIN_API_KEY",
-  authDomain: "dein-projekt.firebaseapp.com",
-  databaseURL: "https://dein-projekt-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "dein-projekt",
+  apiKey: "AIzaSyBTSF1lB5SjOw1tORlXPNeFx2l49oYn9n4",
+  authDomain: "znrgy-ccb87.firebaseapp.com",
+  databaseURL: "https://znrgy-ccb87-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "znrgy-ccb87",
 };
