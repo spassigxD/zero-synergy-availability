@@ -15,4 +15,6 @@ window.FIREBASE_CONFIG = {
   databaseURL: "https://HIER_PROJEKT_ID-default-rtdb.europe-west1.firebasedatabase.app",
   // firebaseConfig.projectId
   projectId: "HIER_PROJEKT_ID",
+  // firebaseConfig.storageBucket (für Strats-Uploads)
+  storageBucket: "HIER_PROJEKT_ID.firebasestorage.app",
 };

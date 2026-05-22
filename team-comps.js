@@ -314,9 +314,11 @@ function buildCompsGrid() {
   }
 
   for (const map of MAPS) {
-    const mapLabel = document.createElement("div");
-    mapLabel.className = "comps-grid__map";
+    const mapLabel = document.createElement("a");
+    mapLabel.className = "comps-grid__map comps-grid__map-link";
+    mapLabel.href = `strats-map.html?map=${encodeURIComponent(map.id)}`;
     mapLabel.textContent = map.label;
+    mapLabel.title = `Strats für ${map.label}`;
     grid.appendChild(mapLabel);
 
     for (const player of PLAYERS) {

@@ -1,0 +1,11 @@
+rules_version = '2';
+// Firebase Storage — Zero Synergy Strats (znrgy-ccb87)
+// In Console: Build → Storage → Regeln → einfügen → Veröffentlichen
+// Oder: firebase deploy --only storage (nach firebase init storage)
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /teams/zero-synergy/strats/{map}/{fileName} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zero Synergy — Strats</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css?v=25" />
+  </head>
+  <body>
+    <div id="configBanner" class="config-banner" hidden>
+      <strong>Firebase nicht konfiguriert</strong> — Strats können nicht
+      synchronisiert werden. Siehe
+      <a href="SETUP-FIREBASE.md" target="_blank" rel="noopener">SETUP-FIREBASE.md</a>.
+    </div>
+
+    <div id="fileProtocolBanner" class="config-banner config-banner--warn" hidden>
+      <strong>Seite per Doppelklick geöffnet (file://)</strong> — Firebase-Uploads
+      funktionieren so nicht. Lokalen Server starten, z. B.
+      <code>py -m http.server 8765</code>, dann
+      <a href="http://127.0.0.1:8765/strats-map.html?map=ascent">http://127.0.0.1:8765/strats-map.html?map=ascent</a>
+      öffnen.
+    </div>
+
+    <div id="storageBanner" class="config-banner config-banner--storage" hidden>
+      <strong>Firebase Storage nicht aktiv</strong> — nach Blaze-Upgrade:
+      <a href="https://console.firebase.google.com/project/znrgy-ccb87/storage" target="_blank" rel="noopener">Console → Storage → Loslegen</a>,
+      danach <code>storage.rules</code> unter Regeln veröffentlichen.
+    </div>
+
+    <div class="site-header">
+      <h1 class="site-header__team">Zero Synergy</h1>
+      <nav class="site-nav" aria-label="Hauptnavigation">
+        <a href="index.html" class="site-nav__link">Availability</a>
+        <a href="team-comps.html" class="site-nav__link">Team Comps</a>
+        <a href="strats.html" class="site-nav__link is-active">Strats</a>
+      </nav>
+    </div>
+
+    <header class="header">
+      <div class="header__brand">
+        <p class="strats-map-back">
+          <a href="strats.html" class="strats-map-back__link">← Alle Maps</a>
+        </p>
+        <h2 class="header__page-title" id="mapTitle">Strats</h2>
+        <p class="header__subtitle">
+          <span id="syncStatus" class="sync-status sync-status--connecting">Laden…</span>
+          <button type="button" class="btn-retry-sync" id="retrySync" hidden>Erneut verbinden</button>
+        </p>
+      </div>
+      <div class="toolbar strats-upload-toolbar">
+        <a
+          href="https://valoplant.gg/"
+          class="strats-valoplant-link"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span class="strats-valoplant-link__title-row">
+            <span class="strats-valoplant-link__title">Neue Strats</span>
+            <span class="strats-valoplant-link__icon" aria-hidden="true">↗</span>
+          </span>
+          <span class="strats-valoplant-link__hint">Lineups auf Valoplant erstellen</span>
+        </a>
+        <label class="strats-upload-label">
+          <span class="strats-upload-label__text">Dateien hochladen</span>
+          <input
+            type="file"
+            id="fileInput"
+            class="strats-upload-input"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+            multiple
+          />
+        </label>
+        <span class="strats-upload-hint">PDF, JPG, PNG, WebP · max. 10 MB · mehrere Dateien</span>
+        <div class="strats-upload-side" id="uploadSidePicker" role="group" aria-label="Upload-Seite">
+          <span class="strats-upload-side__label">Upload als</span>
+          <button
+            type="button"
+            class="strats-side-toggle__btn is-active"
+            data-side="attack"
+            aria-pressed="true"
+          >
+            Attack
+          </button>
+          <button
+            type="button"
+            class="strats-side-toggle__btn"
+            data-side="defence"
+            aria-pressed="false"
+          >
+            Defence
+          </button>
+        </div>
+        <button type="button" class="btn-secondary strats-storage-check-btn" id="storageStatusBtn">
+          Storage-Status prüfen
+        </button>
+        <span id="storageStatusResult" class="storage-status-check" hidden aria-live="polite"></span>
+      </div>
+    </header>
+
+    <main class="strats-map-main">
+      <div id="uploadError" class="strats-upload-error" hidden role="alert"></div>
+      <div id="uploadProgress" class="strats-upload-progress" hidden></div>
+      <p class="strats-reorder-hint" id="reorderHint" hidden>
+        Reihenfolge per Drag innerhalb Attack oder Defence — Griff links an der Karte
+        ziehen. Seite wechseln über Attack/Defence an der Karte.
+      </p>
+      <div class="strats-sides-grid" id="stratsSidesGrid">
+        <section class="strats-side-column" data-side="attack" aria-labelledby="sideTitleAttack">
+          <h3 class="strats-side-column__title" id="sideTitleAttack">Attack</h3>
+          <div
+            class="strats-side-column__list strats-file-list"
+            id="fileListAttack"
+            data-side="attack"
+            aria-live="polite"
+          ></div>
+          <p class="strats-side-column__empty" id="emptyHintAttack" hidden>
+            Noch keine Attack-Strats.
+          </p>
+        </section>
+        <section class="strats-side-column" data-side="defence" aria-labelledby="sideTitleDefence">
+          <h3 class="strats-side-column__title" id="sideTitleDefence">Defence</h3>
+          <div
+            class="strats-side-column__list strats-file-list"
+            id="fileListDefence"
+            data-side="defence"
+            aria-live="polite"
+          ></div>
+          <p class="strats-side-column__empty" id="emptyHintDefence" hidden>
+            Noch keine Defence-Strats.
+          </p>
+        </section>
+      </div>
+      <p class="strats-empty" id="emptyHint" hidden>Noch keine Strats für diese Map.</p>
+    </main>
+
+    <footer class="footer">
+      <p id="footerHint">
+        Bild anklicken für Vollbild. PDFs im eingebetteten Viewer.
+      </p>
+    </footer>
+
+    <div
+      id="lightbox"
+      class="strats-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Strat-Bild Vollbild"
+      hidden
+    >
+      <img class="strats-lightbox__img" id="lightboxImg" alt="" />
+      <div class="strats-lightbox__toolbar" id="lightboxToolbar">
+        <button
+          type="button"
+          class="strats-lightbox__close-x"
+          id="lightboxCloseX"
+          aria-label="Schließen"
+          title="Schließen"
+        >
+          ×
+        </button>
+        <button type="button" class="strats-lightbox__close-btn" id="lightboxCloseBtn">
+          Schließen
+        </button>
+      </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
+    <script src="firebase-config.js?v=25"></script>
+    <script src="strats-map.js?v=25"></script>
+  </body>
+</html>
