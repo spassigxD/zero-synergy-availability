@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=26" />
+    <link rel="stylesheet" href="styles.css?v=37" />
   </head>
   <body>
     <div id="configBanner" class="config-banner" hidden>
@@ -51,8 +51,19 @@
       </div>
     </header>
 
+    <button
+      type="button"
+      class="comps-agents-fab"
+      id="agentsFab"
+      hidden
+      aria-controls="compsSidebar"
+      aria-expanded="false"
+    >
+      Agenten
+    </button>
+
     <div class="comps-layout" id="compsLayout">
-      <aside class="comps-sidebar" aria-label="Agenten">
+      <aside class="comps-sidebar" id="compsSidebar" aria-label="Agenten">
         <div class="comps-sidebar__head">
           <h3 class="comps-sidebar__title">Agenten</h3>
           <p class="comps-sidebar__hint" id="agentCount"></p>
@@ -84,9 +95,53 @@
       </p>
     </footer>
 
+    <div
+      id="cellPicker"
+      class="comps-picker"
+      hidden
+      aria-hidden="true"
+    >
+      <div class="comps-picker__backdrop" id="cellPickerBackdrop"></div>
+      <div
+        class="comps-picker__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cellPickerTitle"
+      >
+        <header class="comps-picker__header">
+          <h2 class="comps-picker__title" id="cellPickerTitle"></h2>
+          <button
+            type="button"
+            class="comps-picker__close-x"
+            id="cellPickerCloseX"
+            aria-label="Schließen"
+          >
+            ×
+          </button>
+        </header>
+        <section class="comps-picker__section">
+          <h3 class="comps-picker__section-title">In dieser Zelle</h3>
+          <ul class="comps-picker__current" id="cellPickerCurrent"></ul>
+          <p class="comps-picker__empty" id="cellPickerEmpty" hidden>Noch keine Agenten</p>
+        </section>
+        <label class="comps-picker__search-label" for="cellPickerSearch">Agent hinzufügen</label>
+        <input
+          type="search"
+          class="comps-picker__search"
+          id="cellPickerSearch"
+          placeholder="Agent suchen…"
+          autocomplete="off"
+        />
+        <ul class="comps-picker__agents" id="cellPickerAgents"></ul>
+        <button type="button" class="comps-picker__close-btn" id="cellPickerClose">
+          Schließen
+        </button>
+      </div>
+    </div>
+
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
-    <script src="firebase-config.js?v=26"></script>
-    <script src="team-comps.js?v=26"></script>
+    <script src="firebase-config.js?v=37"></script>
+    <script src="team-comps.js?v=37"></script>
   </body>
 </html>

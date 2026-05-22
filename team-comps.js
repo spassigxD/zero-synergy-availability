@@ -57,6 +57,13 @@ let comps = {};
 let dragAgent = null;
 let dragSource = null;
 let isEditing = false;
+let cellPickerMap = null;
+let cellPickerPlayer = null;
+let suppressCellClick = false;
+let cellTapViaTouch = false;
+let cellTouchStart = null;
+const CELL_TAP_MOVE_THRESHOLD = 12;
+let agentsSheetOpen = false;
 
 let useFirebase = false;
 let dbRef = null;
@@ -79,6 +86,14 @@ function firebaseRestBase() {
 
 function cellKey(mapId, player) {
   return `${mapId}|${player}`;
+}
+
+function mapLabel(mapId) {
+  return MAPS.find((m) => m.id === mapId)?.label ?? mapId;
+}
+
+function isMobileCompsLayout() {
+  return window.matchMedia("(max-width: 900px)").matches;
 }
 
 function getCellAgents(mapId, player) {
@@ -268,16 +283,36 @@ function renderCell(cellEl) {
   }
   cellEl.classList.toggle("comps-cell--full", list.length >= MAX_AGENTS_PER_CELL);
   cellEl.classList.toggle("comps-cell--empty", list.length === 0);
+  cellEl.classList.toggle("comps-cell--editable", isEditing);
+
+  if (
+    isEditing &&
+    cellPickerMap === map &&
+    cellPickerPlayer === player &&
+    !document.getElementById("cellPicker")?.hidden
+  ) {
+    renderCellPickerCurrent();
+  }
 }
 
 function refreshAllCells() {
   document.querySelectorAll(".comps-cell").forEach(renderCell);
 }
 
+function filterAgentChips(listEl, query) {
+  const q = query.trim().toLowerCase();
+  listEl.querySelectorAll("[data-agent]").forEach((chip) => {
+    const name = chip.dataset.agent.toLowerCase();
+    chip.classList.toggle("is-hidden", Boolean(q && !name.includes(q)));
+  });
+}
+
 function buildAgentSidebar() {
   const countEl = document.getElementById("agentCount");
   if (countEl) {
-    countEl.textContent = `${AGENTS.length} Agenten · in Zelle ziehen`;
+    countEl.textContent = isMobileCompsLayout()
+      ? `${AGENTS.length} Agenten · unten durchsuchen`
+      : `${AGENTS.length} Agenten · ziehen oder Zelle antippen`;
   }
 
   const list = document.getElementById("agentList");
@@ -288,12 +323,189 @@ function buildAgentSidebar() {
 
   const search = document.getElementById("agentSearch");
   search?.addEventListener("input", () => {
-    const q = search.value.trim().toLowerCase();
-    list.querySelectorAll(".comps-agent-chip").forEach((chip) => {
-      const name = chip.dataset.agent.toLowerCase();
-      chip.classList.toggle("is-hidden", Boolean(q && !name.includes(q)));
-    });
+    filterAgentChips(list, search.value);
   });
+}
+
+function buildCellPickerAgentList() {
+  const list = document.getElementById("cellPickerAgents");
+  if (!list || list.dataset.built) return;
+  list.dataset.built = "1";
+  for (const agent of AGENTS) {
+    const li = document.createElement("li");
+    li.className = "comps-picker-agent";
+    li.dataset.agent = agent.name;
+    li.setAttribute("role", "button");
+    li.tabIndex = 0;
+
+    if (agent.icon) {
+      const img = document.createElement("img");
+      img.className = "comps-picker-agent__icon";
+      img.src = agent.icon;
+      img.alt = "";
+      img.width = 40;
+      img.height = 40;
+      img.loading = "lazy";
+      li.appendChild(img);
+    }
+
+    const label = document.createElement("span");
+    label.className = "comps-picker-agent__name";
+    label.textContent = agent.name;
+    li.appendChild(label);
+
+    let pickViaTouch = false;
+    const pick = () => pickAgentForCell(agent.name);
+    li.addEventListener("touchend", (e) => {
+      e.preventDefault();
+      pickViaTouch = true;
+      pick();
+      setTimeout(() => {
+        pickViaTouch = false;
+      }, 450);
+    });
+    li.addEventListener("click", () => {
+      if (pickViaTouch) return;
+      pick();
+    });
+    li.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+    list.appendChild(li);
+  }
+}
+
+function renderCellPickerCurrent() {
+  const current = document.getElementById("cellPickerCurrent");
+  const empty = document.getElementById("cellPickerEmpty");
+  if (!current || cellPickerMap == null || !cellPickerPlayer) return;
+
+  current.innerHTML = "";
+  const list = getCellAgents(cellPickerMap, cellPickerPlayer);
+  empty.hidden = list.length > 0;
+
+  for (const name of list) {
+    const li = document.createElement("li");
+    li.className = "comps-picker-current-agent";
+
+    const agent = agentByName[name];
+    if (agent?.icon) {
+      const img = document.createElement("img");
+      img.className = "comps-picker-current-agent__icon";
+      img.src = agent.icon;
+      img.alt = "";
+      img.width = 36;
+      img.height = 36;
+      li.appendChild(img);
+    }
+
+    const label = document.createElement("span");
+    label.className = "comps-picker-current-agent__name";
+    label.textContent = name;
+    li.appendChild(label);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "comps-picker-current-agent__remove";
+    btn.setAttribute("aria-label", `${name} entfernen`);
+    btn.textContent = "×";
+    btn.addEventListener("click", () => {
+      removeAgentFromCell(cellPickerMap, cellPickerPlayer, name);
+      refreshCellByKey(cellPickerMap, cellPickerPlayer);
+      renderCellPickerCurrent();
+      refreshCellPickerAgents();
+    });
+    li.appendChild(btn);
+    current.appendChild(li);
+  }
+}
+
+function refreshCellPickerAgents() {
+  const list = document.getElementById("cellPickerAgents");
+  if (!list || cellPickerMap == null || !cellPickerPlayer) return;
+  const inCell = getCellAgents(cellPickerMap, cellPickerPlayer);
+  const full = inCell.length >= MAX_AGENTS_PER_CELL;
+  list.querySelectorAll(".comps-picker-agent").forEach((item) => {
+    const name = item.dataset.agent;
+    const already = inCell.includes(name);
+    item.classList.toggle("is-disabled", full && !already);
+    item.classList.toggle("is-in-cell", already);
+    item.setAttribute("aria-disabled", full && !already ? "true" : "false");
+  });
+}
+
+function refreshCellByKey(mapId, player) {
+  document.querySelectorAll(".comps-cell").forEach((c) => {
+    if (c.dataset.map === mapId && c.dataset.player === player) renderCell(c);
+  });
+}
+
+function pickAgentForCell(agentName) {
+  if (cellPickerMap == null || !cellPickerPlayer) return;
+  const list = getCellAgents(cellPickerMap, cellPickerPlayer);
+  if (list.includes(agentName) || list.length >= MAX_AGENTS_PER_CELL) return;
+  if (!addAgentToCell(cellPickerMap, cellPickerPlayer, agentName)) return;
+  refreshCellByKey(cellPickerMap, cellPickerPlayer);
+  renderCellPickerCurrent();
+  refreshCellPickerAgents();
+}
+
+function openCellPicker(mapId, player) {
+  const picker = document.getElementById("cellPicker");
+  if (!picker || !isEditing) return;
+
+  cellPickerMap = mapId;
+  cellPickerPlayer = player;
+
+  const title = document.getElementById("cellPickerTitle");
+  if (title) {
+    title.textContent = `${mapLabel(mapId)} · ${player}`;
+  }
+
+  const search = document.getElementById("cellPickerSearch");
+  if (search) search.value = "";
+
+  buildCellPickerAgentList();
+  renderCellPickerCurrent();
+  refreshCellPickerAgents();
+  filterAgentChips(document.getElementById("cellPickerAgents"), "");
+
+  picker.hidden = false;
+  picker.setAttribute("aria-hidden", "false");
+  document.body.classList.add("comps-picker-open");
+  search?.focus();
+}
+
+function closeCellPicker() {
+  const picker = document.getElementById("cellPicker");
+  if (!picker || picker.hidden) return;
+  picker.hidden = true;
+  picker.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("comps-picker-open");
+  cellPickerMap = null;
+  cellPickerPlayer = null;
+}
+
+function setAgentsSheetOpen(open) {
+  agentsSheetOpen = open;
+  const layout = document.getElementById("compsLayout");
+  const fab = document.getElementById("agentsFab");
+  layout?.classList.toggle("is-agents-sheet-open", open);
+  if (fab) {
+    fab.setAttribute("aria-expanded", open ? "true" : "false");
+    fab.textContent = open ? "Agenten schließen" : "Agenten";
+  }
+}
+
+function updateMobileAgentsFab() {
+  const fab = document.getElementById("agentsFab");
+  if (!fab) return;
+  const show = isEditing && isMobileCompsLayout();
+  fab.hidden = !show;
+  if (!show) setAgentsSheetOpen(false);
 }
 
 function buildCompsGrid() {
@@ -335,6 +547,9 @@ function buildCompsGrid() {
       cell.addEventListener("dragover", onCellDragOver);
       cell.addEventListener("dragleave", onCellDragLeave);
       cell.addEventListener("drop", onCellDrop);
+      cell.addEventListener("click", onCellClick);
+      cell.addEventListener("touchstart", onCellTouchStart, { passive: true });
+      cell.addEventListener("touchend", onCellTouchEnd, { passive: false });
 
       grid.appendChild(cell);
       renderCell(cell);
@@ -357,9 +572,15 @@ function setEditMode(editing) {
   if (resetBtn) resetBtn.hidden = !editing;
   if (footer) {
     footer.innerHTML = editing
-      ? "Agent aus der Liste in eine Zelle ziehen (bis zu <strong>3 pro Zelle</strong>). Mit <strong>×</strong> entfernen oder per Drag verschieben. Änderungen werden <strong>live für das Team</strong> synchronisiert."
+      ? isMobileCompsLayout()
+        ? "Zelle <strong>antippen</strong> zum Hinzufügen (max. <strong>3</strong>) oder <strong>Agenten</strong> unten für Drag. Änderungen werden <strong>live für das Team</strong> synchronisiert."
+        : "Agent <strong>ziehen</strong> oder Zelle <strong>anklicken</strong> (max. <strong>3 pro Zelle</strong>). Mit <strong>×</strong> entfernen. Änderungen werden <strong>live für das Team</strong> synchronisiert."
       : "Team-Comps pro Map und Spieler — zum Bearbeiten auf <strong>Bearbeiten</strong> klicken.";
   }
+
+  if (!editing) closeCellPicker();
+  updateMobileAgentsFab();
+  buildAgentSidebar();
 
   refreshAllCells();
   document.querySelectorAll(".comps-cell.is-drop-target").forEach((c) => {
@@ -369,11 +590,52 @@ function setEditMode(editing) {
   dragSource = null;
 }
 
+function handleCellTap(cell, target) {
+  if (!isEditing || suppressCellClick || !cell) return;
+  if (target?.closest?.(".comps-cell-agent__remove")) return;
+  openCellPicker(cell.dataset.map, cell.dataset.player);
+}
+
+function onCellTouchStart(e) {
+  if (!isEditing || suppressCellClick) return;
+  const t = e.touches[0];
+  if (!t) return;
+  cellTouchStart = {
+    x: t.clientX,
+    y: t.clientY,
+    cell: e.currentTarget,
+  };
+}
+
+function onCellTouchEnd(e) {
+  const start = cellTouchStart;
+  cellTouchStart = null;
+  if (!start || e.currentTarget !== start.cell) return;
+  const t = e.changedTouches[0];
+  if (!t) return;
+  const dx = t.clientX - start.x;
+  const dy = t.clientY - start.y;
+  if (Math.hypot(dx, dy) > CELL_TAP_MOVE_THRESHOLD) return;
+  if (!isEditing || suppressCellClick) return;
+  e.preventDefault();
+  cellTapViaTouch = true;
+  handleCellTap(e.currentTarget, e.target);
+  setTimeout(() => {
+    cellTapViaTouch = false;
+  }, 450);
+}
+
+function onCellClick(e) {
+  if (cellTapViaTouch) return;
+  handleCellTap(e.currentTarget, e.target);
+}
+
 function onAgentDragStart(e) {
   if (!isEditing) {
     e.preventDefault();
     return;
   }
+  suppressCellClick = true;
   const chip = e.currentTarget;
   dragAgent = chip.dataset.agent;
   dragSource = chip.closest(".comps-cell")
@@ -391,6 +653,9 @@ function onAgentDragEnd(e) {
   });
   dragAgent = null;
   dragSource = null;
+  setTimeout(() => {
+    suppressCellClick = false;
+  }, 0);
 }
 
 function onCellDragOver(e) {
@@ -429,6 +694,10 @@ function removeAgentFromCell(mapId, player, agentName) {
 function onCellDrop(e) {
   if (!isEditing) return;
   e.preventDefault();
+  suppressCellClick = true;
+  setTimeout(() => {
+    suppressCellClick = false;
+  }, 0);
   const targetCell = e.currentTarget;
   targetCell.classList.remove("is-drop-target");
   const agent = dragAgent || e.dataTransfer.getData("text/plain");
@@ -670,6 +939,33 @@ document.getElementById("resetAll")?.addEventListener("click", () => {
 
 document.getElementById("retrySync")?.addEventListener("click", () => {
   retryFirebaseSync();
+});
+
+document.getElementById("cellPickerBackdrop")?.addEventListener("click", closeCellPicker);
+document.getElementById("cellPickerClose")?.addEventListener("click", closeCellPicker);
+document.getElementById("cellPickerCloseX")?.addEventListener("click", closeCellPicker);
+
+document.getElementById("cellPickerSearch")?.addEventListener("input", (e) => {
+  const list = document.getElementById("cellPickerAgents");
+  if (list) filterAgentChips(list, e.target.value);
+});
+
+document.getElementById("agentsFab")?.addEventListener("click", () => {
+  setAgentsSheetOpen(!agentsSheetOpen);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!document.getElementById("cellPicker")?.hidden) {
+    closeCellPicker();
+    return;
+  }
+  if (agentsSheetOpen) setAgentsSheetOpen(false);
+});
+
+window.matchMedia("(max-width: 900px)").addEventListener("change", () => {
+  updateMobileAgentsFab();
+  if (isEditing) buildAgentSidebar();
 });
 
 initSync();
