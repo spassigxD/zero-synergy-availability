@@ -7,4 +7,5 @@ window.FIREBASE_CONFIG = {
   authDomain: "znrgy-ccb87.firebaseapp.com",
   databaseURL: "https://znrgy-ccb87-default-rtdb.europe-west1.firebasedatabase.app",
   projectId: "znrgy-ccb87",
+  storageBucket: "znrgy-ccb87.firebasestorage.app",
 };

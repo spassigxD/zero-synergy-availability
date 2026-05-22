@@ -28,25 +28,21 @@ let storageApiReachable = null;
 function storageSetupErrorHtml() {
   if (storageApiReachable === true) {
     return (
-      `Upload bleibt bei 0&nbsp;% — Storage ist aktiv, Zugriff fehlt vermutlich. ` +
-      `<code>storage.rules</code> in der ` +
-      `<a href="${FIREBASE_STORAGE_CONSOLE}/rules" target="_blank" rel="noopener">Console → Storage → Regeln</a> veröffentlichen · ` +
-      `<a href="SETUP-FIREBASE.md" target="_blank" rel="noopener">SETUP-FIREBASE.md</a>`
+      `Upload bleibt bei 0&nbsp;% — Regeln veröffentlichen: ` +
+      `<a href="${FIREBASE_STORAGE_CONSOLE}/rules" target="_blank" rel="noopener">Console → Storage → Regeln</a>`
     );
   }
   return (
-    `Upload bleibt bei 0&nbsp;% — Firebase Storage ist nicht aktiv. ` +
-    `Nach Blaze-Upgrade: <a href="${FIREBASE_STORAGE_CONSOLE}" target="_blank" rel="noopener">Console → Storage → Loslegen</a>, ` +
-    `dann <code>storage.rules</code> veröffentlichen · ` +
-    `<a href="SETUP-FIREBASE.md" target="_blank" rel="noopener">SETUP-FIREBASE.md</a>`
+    `Upload bleibt bei 0&nbsp;% — Storage in Console aktivieren (` +
+    `<a href="${FIREBASE_STORAGE_CONSOLE}" target="_blank" rel="noopener">Loslegen</a>)`
   );
 }
 
 function storageSetupErrorPlain() {
   if (storageApiReachable === true) {
-    return `Upload bleibt bei 0 % — storage.rules veröffentlichen: ${FIREBASE_STORAGE_CONSOLE}/rules`;
+    return "Upload bleibt bei 0 % — Regeln veröffentlichen";
   }
-  return `Upload bleibt bei 0 % — nach Blaze-Upgrade Storage → Loslegen: ${FIREBASE_STORAGE_CONSOLE}`;
+  return "Upload bleibt bei 0 % — Storage in Console aktivieren (Loslegen)";
 }
 
 const mapById = Object.fromEntries(MAPS.map((m) => [m.id, m]));
@@ -354,9 +350,19 @@ async function checkStorageStatus() {
   if (btn) btn.disabled = true;
   setStorageStatusResult("pending", "Prüfe…");
 
+  if (!isFirebaseConfigured()) {
+    setStorageStatusResult("fail", "firebase-config.js fehlt auf der Website — bitte deployen");
+    setBannerVisible("configBanner", true);
+    if (btn) btn.disabled = false;
+    return false;
+  }
+
   const bucket = window.FIREBASE_CONFIG?.storageBucket;
   if (!bucket || String(bucket).includes("DEIN")) {
-    setStorageStatusResult("fail", "Storage nicht eingerichtet — klicke Loslegen in Console");
+    setStorageStatusResult(
+      "fail",
+      "firebase-config.js unvollständig — storageBucket fehlt, bitte deployen"
+    );
     showStorageSetupBanner();
     if (btn) btn.disabled = false;
     return false;
@@ -367,10 +373,7 @@ async function checkStorageStatus() {
     const res = await fetch(listUrl);
     if (res.status === 404) {
       storageApiReachable = false;
-      setStorageStatusResult(
-        "fail",
-        "Storage nicht aktiv — nach Blaze-Upgrade: Storage → Loslegen"
-      );
+      setStorageStatusResult("fail", "Storage in Console aktivieren (Loslegen)");
       showStorageSetupBanner();
       if (btn) btn.disabled = false;
       return false;
@@ -378,7 +381,7 @@ async function checkStorageStatus() {
     if (res.ok || res.status === 403) {
       storageApiReachable = true;
       if (res.status === 403) {
-        setStorageStatusResult("ok", "Storage aktiv — storage.rules veröffentlichen");
+        setStorageStatusResult("ok", "Storage aktiv — Regeln veröffentlichen");
       } else {
         setStorageStatusResult("ok", "Storage aktiv");
       }
@@ -405,7 +408,7 @@ async function checkStorageStatus() {
     } catch (err) {
       const code = String(err?.code || "").toLowerCase();
       if (code === "storage/bucket-not-found" || code === "storage/object-not-found") {
-        setStorageStatusResult("fail", "Storage nicht eingerichtet — klicke Loslegen in Console");
+        setStorageStatusResult("fail", "Storage in Console aktivieren (Loslegen)");
         showStorageSetupBanner();
         if (btn) btn.disabled = false;
         return false;
@@ -419,7 +422,7 @@ async function checkStorageStatus() {
     }
   }
 
-  setStorageStatusResult("fail", "Storage nicht eingerichtet — klicke Loslegen in Console");
+  setStorageStatusResult("fail", "Storage in Console aktivieren (Loslegen)");
   showStorageSetupBanner();
   if (btn) btn.disabled = false;
   return false;

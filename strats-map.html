@@ -10,13 +10,13 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=25" />
+    <link rel="stylesheet" href="styles.css?v=26" />
   </head>
   <body>
     <div id="configBanner" class="config-banner" hidden>
-      <strong>Firebase nicht konfiguriert</strong> — Strats können nicht
-      synchronisiert werden. Siehe
-      <a href="SETUP-FIREBASE.md" target="_blank" rel="noopener">SETUP-FIREBASE.md</a>.
+      <strong>firebase-config.js fehlt auf der Website</strong> — bitte die Datei
+      mit Firebase-Werten ins Repo legen und deployen.
+      <a href="LIVE-SETUP.md" target="_blank" rel="noopener">LIVE-SETUP.md</a>
     </div>
 
     <div id="fileProtocolBanner" class="config-banner config-banner--warn" hidden>
@@ -28,9 +28,10 @@
     </div>
 
     <div id="storageBanner" class="config-banner config-banner--storage" hidden>
-      <strong>Firebase Storage nicht aktiv</strong> — nach Blaze-Upgrade:
-      <a href="https://console.firebase.google.com/project/znrgy-ccb87/storage" target="_blank" rel="noopener">Console → Storage → Loslegen</a>,
-      danach <code>storage.rules</code> unter Regeln veröffentlichen.
+      <strong>Storage-Problem</strong> —
+      <a href="https://console.firebase.google.com/project/znrgy-ccb87/storage" target="_blank" rel="noopener">Console → Storage → Loslegen</a>
+      oder Regeln veröffentlichen.
+      <a href="LIVE-SETUP.md" target="_blank" rel="noopener">LIVE-SETUP.md</a>
     </div>
 
     <div class="site-header">
@@ -173,7 +174,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
-    <script src="firebase-config.js?v=25"></script>
-    <script src="strats-map.js?v=25"></script>
+    <script src="firebase-config.js?v=27"></script>
+    <script src="strats-map.js?v=27"></script>
   </body>
 </html>
