@@ -49,7 +49,7 @@ const mapById = Object.fromEntries(MAPS.map((m) => [m.id, m]));
 
 let mapSlug = null;
 let mapLabel = null;
-let files = [];
+let groups = [];
 let useFirebase = false;
 let useStorage = false;
 let dbRef = null;
@@ -60,6 +60,7 @@ let isUploading = false;
 let isSavingMeta = false;
 let dragSourceId = null;
 let uploadSide = "attack";
+let activeSide = "attack";
 
 function getMapFromQuery() {
   const params = new URLSearchParams(window.location.search);
@@ -106,7 +107,7 @@ function uniqueId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function normalizeFilesList(data) {
+function normalizeGroupsList(data) {
   if (!data) return [];
   if (Array.isArray(data)) return data.filter(Boolean);
   if (typeof data === "object") return Object.values(data).filter(Boolean);
@@ -123,59 +124,166 @@ function normalizeSide(side) {
   return side === "defence" ? "defence" : "attack";
 }
 
-function migrateFileEntry(file, index) {
-  const entry = { ...file };
-  if (entry.order == null || Number.isNaN(Number(entry.order))) {
-    entry.order = index;
-  } else {
-    entry.order = Number(entry.order);
-  }
-  if (!entry.title || !String(entry.title).trim()) {
-    entry.title = defaultTitleFromFilename(entry.name);
-  }
-  if (entry.description == null) entry.description = "";
-  entry.side = normalizeSide(entry.side);
-  return entry;
+function isLegacyFileEntry(entry) {
+  return Boolean(
+    entry &&
+      !Array.isArray(entry.images) &&
+      (entry.downloadURL || entry.storagePath || entry.name)
+  );
 }
 
-function reindexFileOrders(list) {
-  return list.map((f, i) => ({ ...f, order: i }));
+function normalizeImagesList(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data.filter(Boolean);
+  if (typeof data === "object") return Object.values(data).filter(Boolean);
+  return [];
+}
+
+function migrateImageEntry(image, index) {
+  const img = { ...image };
+  if (!img.id) img.id = uniqueId();
+  if (img.order == null || Number.isNaN(Number(img.order))) {
+    img.order = index;
+  } else {
+    img.order = Number(img.order);
+  }
+  if (!img.type && img.name) img.type = fileTypeFromName(img.name);
+  return img;
+}
+
+function reindexImageOrders(images) {
+  return images.map((img, i) => ({ ...img, order: i }));
+}
+
+function legacyFileToGroup(file, index) {
+  const image = migrateImageEntry(
+    {
+      id: uniqueId(),
+      name: file.name,
+      storagePath: file.storagePath,
+      downloadURL: file.downloadURL,
+      type: file.type || fileTypeFromName(file.name),
+      uploadedAt: file.uploadedAt,
+      order: 0,
+    },
+    0
+  );
+  const group = {
+    id: file.id || uniqueId(),
+    title: file.title,
+    description: file.description ?? "",
+    side: normalizeSide(file.side),
+    order: file.order ?? index,
+    images: [image],
+  };
+  if (!group.title || !String(group.title).trim()) {
+    group.title = defaultTitleFromFilename(file.name);
+  }
+  if (group.order == null || Number.isNaN(Number(group.order))) {
+    group.order = index;
+  } else {
+    group.order = Number(group.order);
+  }
+  return group;
+}
+
+function migrateGroupEntry(entry, index) {
+  if (isLegacyFileEntry(entry)) {
+    return legacyFileToGroup(entry, index);
+  }
+  const group = { ...entry };
+  if (!group.id) group.id = uniqueId();
+  if (group.description == null) group.description = "";
+  group.side = normalizeSide(group.side);
+  if (group.order == null || Number.isNaN(Number(group.order))) {
+    group.order = index;
+  } else {
+    group.order = Number(group.order);
+  }
+  const images = normalizeImagesList(group.images).map((img, i) => migrateImageEntry(img, i));
+  group.images = reindexImageOrders(
+    images.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  );
+  if (!group.title || !String(group.title).trim()) {
+    const firstName = group.images[0]?.name;
+    group.title = firstName ? defaultTitleFromFilename(firstName) : "Unbenannt";
+  }
+  if (!group.images.length) {
+    group.title = group.title || "Unbenannt";
+  }
+  return group;
+}
+
+function reindexGroupOrders(list) {
+  return list.map((g, i) => ({ ...g, order: i }));
 }
 
 function reindexAllSides(list) {
   const merged = [];
   for (const side of SIDES) {
-    const sideFiles = list
-      .filter((f) => normalizeSide(f.side) === side)
+    const sideGroups = list
+      .filter((g) => normalizeSide(g.side) === side)
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    merged.push(...reindexFileOrders(sideFiles.map((f) => ({ ...f, side }))));
+    merged.push(...reindexGroupOrders(sideGroups.map((g) => ({ ...g, side }))));
   }
   return merged;
 }
 
-function migrateAndSortFilesList(data) {
-  const list = normalizeFilesList(data);
-  const migrated = list.map((f, i) => migrateFileEntry(f, i));
+function migrateAndSortGroupsList(data) {
+  const list = normalizeGroupsList(data);
+  const migrated = list.map((g, i) => migrateGroupEntry(g, i));
   const sorted = migrated.sort((a, b) => a.order - b.order);
   return reindexAllSides(sorted);
 }
 
-function getSortedFiles(side) {
+function getSortedGroups(side) {
   const filtered = side
-    ? files.filter((f) => normalizeSide(f.side) === normalizeSide(side))
-    : [...files];
+    ? groups.filter((g) => normalizeSide(g.side) === normalizeSide(side))
+    : [...groups];
   return filtered.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+function getSortedImages(group) {
+  const images = normalizeImagesList(group?.images);
+  return images.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
 function mergeSideLists(attackList, defenceList) {
   return [
-    ...reindexFileOrders(attackList.map((f) => ({ ...f, side: "attack" }))),
-    ...reindexFileOrders(defenceList.map((f) => ({ ...f, side: "defence" }))),
+    ...reindexGroupOrders(attackList.map((g) => ({ ...g, side: "attack" }))),
+    ...reindexGroupOrders(defenceList.map((g) => ({ ...g, side: "defence" }))),
   ];
 }
 
-function displayLabel(file) {
-  return (file.title && String(file.title).trim()) || file.name || "Unbenannt";
+function displayLabel(group) {
+  const title = group?.title && String(group.title).trim();
+  if (title) return title;
+  const first = getSortedImages(group)[0];
+  return first?.name ? defaultTitleFromFilename(first.name) : "Unbenannt";
+}
+
+function groupMetaSummary(group) {
+  const images = getSortedImages(group);
+  const imageCount = images.filter((i) => i.type === "image").length;
+  const pdfCount = images.filter((i) => i.type === "pdf").length;
+  const parts = [];
+  if (imageCount) parts.push(imageCount === 1 ? "1 Bild" : `${imageCount} Bilder`);
+  if (pdfCount) parts.push(pdfCount === 1 ? "1 PDF" : `${pdfCount} PDFs`);
+  const latest = images
+    .map((i) => i.uploadedAt)
+    .filter(Boolean)
+    .sort()
+    .pop();
+  if (latest) parts.push(formatDate(latest));
+  return parts.join(" · ");
+}
+
+function galleryLayoutClass(count) {
+  if (count <= 1) return "strats-gallery--1";
+  if (count === 2) return "strats-gallery--2";
+  if (count <= 4) return "strats-gallery--4";
+  if (count === 5) return "strats-gallery--5";
+  return "strats-gallery--many";
 }
 
 function setBannerVisible(id, visible) {
@@ -588,24 +696,469 @@ function markCardDirty(card) {
   setCardSaveState(card, "dirty");
 }
 
+/** Max height before description scrolls (very long notes). */
+const DESC_EDITOR_MAX_HEIGHT_PX = 480;
+const DESC_BULLET_LINE_RE = /^\s*[-•]\s/;
+
+function escapeDescHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function isStoredDescriptionHtml(stored) {
+  const s = (stored ?? "").trim();
+  if (!s) return false;
+  return /<[a-z][\s\S]*>/i.test(s);
+}
+
+function plainTextToDescHtml(text) {
+  const raw = text ?? "";
+  if (!raw) return "";
+  return raw
+    .split("\n")
+    .map((line) => {
+      const cls = DESC_BULLET_LINE_RE.test(line) ? "strats-desc-bullet" : "strats-desc-line";
+      const inner = line === "" ? "<br>" : escapeDescHtml(line);
+      return `<p class="${cls}">${inner}</p>`;
+    })
+    .join("");
+}
+
+function descParagraphClassFromNode(node) {
+  if (node.classList?.contains("strats-desc-bullet")) return "strats-desc-bullet";
+  if (node.classList?.contains("strats-desc-line")) return "strats-desc-line";
+  return DESC_BULLET_LINE_RE.test(node.textContent || "")
+    ? "strats-desc-bullet"
+    : "strats-desc-line";
+}
+
+function sanitizeDescNode(node, outParent) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const t = node.textContent || "";
+    if (t) outParent.appendChild(document.createTextNode(t));
+    return;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+  const tag = node.nodeName;
+  if (tag === "SCRIPT" || tag === "STYLE") return;
+
+  if (tag === "P" || tag === "DIV") {
+    const p = document.createElement("p");
+    p.className = descParagraphClassFromNode(node);
+    for (const child of node.childNodes) sanitizeDescNode(child, p);
+    if (!p.childNodes.length) p.appendChild(document.createElement("br"));
+    outParent.appendChild(p);
+    return;
+  }
+  if (tag === "BR") {
+    outParent.appendChild(document.createElement("br"));
+    return;
+  }
+  if (tag === "STRONG" || tag === "B") {
+    const el = document.createElement("strong");
+    for (const child of node.childNodes) sanitizeDescNode(child, el);
+    if (el.childNodes.length) outParent.appendChild(el);
+    return;
+  }
+  if (tag === "EM" || tag === "I") {
+    const el = document.createElement("em");
+    for (const child of node.childNodes) sanitizeDescNode(child, el);
+    if (el.childNodes.length) outParent.appendChild(el);
+    return;
+  }
+  if (tag === "SPAN" && node.classList.contains("strats-desc-large")) {
+    const el = document.createElement("span");
+    el.className = "strats-desc-large";
+    for (const child of node.childNodes) sanitizeDescNode(child, el);
+    if (el.childNodes.length) outParent.appendChild(el);
+    return;
+  }
+
+  for (const child of node.childNodes) sanitizeDescNode(child, outParent);
+}
+
+function sanitizeDescriptionHtml(html) {
+  const raw = html ?? "";
+  if (!String(raw).trim()) return "";
+  const wrap = document.createElement("div");
+  wrap.innerHTML = raw;
+  const out = document.createElement("div");
+  for (const child of wrap.childNodes) sanitizeDescNode(child, out);
+  if (!out.querySelector("p")) {
+    const text = (out.textContent || "").trim();
+    if (!text && !out.querySelector("br")) return "";
+    return plainTextToDescHtml(out.textContent || "");
+  }
+  return out.innerHTML;
+}
+
+function extractDescriptionFromEditor(el) {
+  if (!el) return "";
+  ensureDescEditorHasBlock(el);
+  const html = (el.innerHTML || "").trim();
+  if (!html) return "";
+  return sanitizeDescriptionHtml(el.innerHTML);
+}
+
+function syncDescEditorFromStored(descEl, stored) {
+  if (!descEl) return;
+  const raw = stored ?? "";
+  descEl.innerHTML = isStoredDescriptionHtml(raw)
+    ? sanitizeDescriptionHtml(raw)
+    : plainTextToDescHtml(raw);
+  fitDescEditor(descEl);
+}
+
+function findAncestorDescLarge(node, root) {
+  while (node && node !== root) {
+    if (
+      node.nodeType === Node.ELEMENT_NODE &&
+      node.nodeName === "SPAN" &&
+      node.classList.contains("strats-desc-large")
+    ) {
+      return node;
+    }
+    node = node.parentNode;
+  }
+  return null;
+}
+
+function unwrapDescElement(el) {
+  const parent = el.parentNode;
+  if (!parent) return;
+  while (el.firstChild) parent.insertBefore(el.firstChild, el);
+  parent.removeChild(el);
+}
+
+function wrapRangeWithDescClass(range, className) {
+  const span = document.createElement("span");
+  span.className = className;
+  try {
+    range.surroundContents(span);
+  } catch {
+    const fragment = range.extractContents();
+    span.appendChild(fragment);
+    range.insertNode(span);
+  }
+  const sel = window.getSelection();
+  if (sel) {
+    sel.removeAllRanges();
+    const next = document.createRange();
+    next.selectNodeContents(span);
+    next.collapse(false);
+    sel.addRange(next);
+  }
+}
+
+function toggleDescLargeFormat(descEl) {
+  const sel = window.getSelection();
+  if (!sel?.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  if (!descEl.contains(range.commonAncestorContainer)) return;
+
+  if (!range.collapsed) {
+    const startLarge = findAncestorDescLarge(range.startContainer, descEl);
+    const endLarge = findAncestorDescLarge(range.endContainer, descEl);
+    if (startLarge && startLarge === endLarge) {
+      unwrapDescElement(startLarge);
+      return;
+    }
+    wrapRangeWithDescClass(range, "strats-desc-large");
+    return;
+  }
+
+  const atLarge = findAncestorDescLarge(sel.anchorNode, descEl);
+  if (atLarge) {
+    unwrapDescElement(atLarge);
+    return;
+  }
+
+  const span = document.createElement("span");
+  span.className = "strats-desc-large";
+  span.appendChild(document.createTextNode("\u200b"));
+  range.insertNode(span);
+  const caret = document.createRange();
+  caret.setStart(span.firstChild, 1);
+  caret.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(caret);
+}
+
+function applyDescFormat(descEl, format) {
+  if (!descEl || descEl.getAttribute("contenteditable") !== "true") return;
+  descEl.focus();
+  ensureDescEditorHasBlock(descEl);
+  if (format === "bold") {
+    document.execCommand("bold", false, null);
+  } else if (format === "italic") {
+    document.execCommand("italic", false, null);
+  } else if (format === "large") {
+    toggleDescLargeFormat(descEl);
+  }
+  notifyDescEditorChange(descEl);
+}
+
+function bindDescFormatToolbar(toolbar, descEl) {
+  if (!toolbar || !descEl) return;
+  toolbar.querySelectorAll("[data-format]").forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      applyDescFormat(descEl, btn.dataset.format);
+    });
+  });
+}
+
+function createDescFormatToolbar(canEditToolbar) {
+  const toolbar = document.createElement("div");
+  toolbar.className = "strats-desc-toolbar";
+  toolbar.setAttribute("role", "toolbar");
+  toolbar.setAttribute("aria-label", "Beschreibung formatieren");
+  const items = [
+    { format: "bold", label: "Fett", aria: "Fett" },
+    { format: "italic", label: "Kursiv", aria: "Kursiv" },
+    { format: "large", label: "Größer", aria: "Größerer Text" },
+  ];
+  for (const { format, label, aria } of items) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "strats-desc-toolbar__btn";
+    btn.dataset.format = format;
+    btn.textContent = label;
+    btn.setAttribute("aria-label", aria);
+    btn.disabled = !canEditToolbar;
+    toolbar.appendChild(btn);
+  }
+  return toolbar;
+}
+
+function setPlainTextInputAttrs(input) {
+  if (!input) return;
+  input.setAttribute("spellcheck", "false");
+  input.setAttribute("autocorrect", "off");
+  input.setAttribute("autocapitalize", "off");
+}
+
+function fitDescEditor(descEl) {
+  if (!descEl) return;
+  descEl.style.height = "auto";
+  const minH = parseFloat(getComputedStyle(descEl).minHeight) || 0;
+  const next = Math.max(descEl.scrollHeight, minH);
+  if (next <= DESC_EDITOR_MAX_HEIGHT_PX) {
+    descEl.style.height = `${next}px`;
+    descEl.style.overflowY = "hidden";
+  } else {
+    descEl.style.height = `${DESC_EDITOR_MAX_HEIGHT_PX}px`;
+    descEl.style.overflowY = "auto";
+  }
+}
+
+function bindDescEditorAutoResize(descEl) {
+  if (!descEl) return;
+  const resize = () => fitDescEditor(descEl);
+  descEl.addEventListener("input", resize);
+  if (typeof ResizeObserver !== "undefined") {
+    const ro = new ResizeObserver(resize);
+    ro.observe(descEl);
+  }
+  requestAnimationFrame(resize);
+}
+
+function getActiveDescBlock(descEl) {
+  const sel = window.getSelection();
+  if (!sel?.rangeCount || !descEl) return null;
+  let node = sel.anchorNode;
+  if (!node || !descEl.contains(node)) return null;
+  while (node && node !== descEl) {
+    if (node.nodeName === "P" || (node.nodeName === "DIV" && node.parentNode === descEl)) {
+      return node;
+    }
+    node = node.parentNode;
+  }
+  return null;
+}
+
+function isDescBulletBlock(block) {
+  if (!block) return false;
+  if (block.classList?.contains("strats-desc-bullet")) return true;
+  return DESC_BULLET_LINE_RE.test(block.textContent || "");
+}
+
+function createDescParagraph(isBullet, text = "") {
+  const p = document.createElement("p");
+  p.className = isBullet ? "strats-desc-bullet" : "strats-desc-line";
+  if (!text) {
+    p.appendChild(document.createElement("br"));
+  } else {
+    p.textContent = text;
+  }
+  return p;
+}
+
+function setDescBlockText(block, text) {
+  if (!text) {
+    block.textContent = "";
+    block.appendChild(document.createElement("br"));
+  } else {
+    block.textContent = text;
+  }
+}
+
+function formatNewBulletLineText(afterText) {
+  const trimmed = (afterText || "").replace(/^\s+/, "");
+  if (!trimmed) return "- ";
+  if (DESC_BULLET_LINE_RE.test(trimmed) || /^\s*[-•]/.test(afterText || "")) return trimmed;
+  return `- ${trimmed}`;
+}
+
+function descBulletCaretOffset(text) {
+  const m = (text || "").match(/^\s*([-•])\s*/);
+  return m ? m[0].length : 0;
+}
+
+function isEmptyBulletBlock(block) {
+  const t = (block?.textContent || "").replace(/\u00a0/g, " ").trim();
+  return !t || t === "-" || /^-\s*$/.test(t);
+}
+
+function getTextSplitInBlock(block, range) {
+  const beforeRange = document.createRange();
+  beforeRange.selectNodeContents(block);
+  beforeRange.setEnd(range.startContainer, range.startOffset);
+  const afterRange = document.createRange();
+  afterRange.selectNodeContents(block);
+  afterRange.setStart(range.endContainer, range.endOffset);
+  return { before: beforeRange.toString(), after: afterRange.toString() };
+}
+
+function isCaretAtBlockStart(range, block) {
+  const r = document.createRange();
+  r.selectNodeContents(block);
+  r.setEnd(range.startContainer, range.startOffset);
+  return r.toString().length === 0;
+}
+
+function placeCaretInDescBlock(block, offset) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  const textNode = [...block.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+  if (textNode) {
+    const pos = Math.min(Math.max(0, offset), textNode.length);
+    range.setStart(textNode, pos);
+    range.collapse(true);
+  } else {
+    range.selectNodeContents(block);
+    range.collapse(true);
+  }
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function ensureDescEditorHasBlock(descEl) {
+  const hasBlock = [...descEl.childNodes].some(
+    (n) => n.nodeName === "P" || (n.nodeName === "DIV" && n !== descEl)
+  );
+  if (!hasBlock) {
+    descEl.appendChild(createDescParagraph(false));
+  }
+}
+
+function notifyDescEditorChange(descEl) {
+  descEl.dispatchEvent(new Event("input", { bubbles: true }));
+  fitDescEditor(descEl);
+}
+
+function handleDescEditorEnter(descEl, e) {
+  e.preventDefault();
+  ensureDescEditorHasBlock(descEl);
+  const sel = window.getSelection();
+  if (!sel?.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  if (!descEl.contains(range.commonAncestorContainer)) return;
+  if (!range.collapsed) range.deleteContents();
+
+  let block = getActiveDescBlock(descEl);
+  if (!block) {
+    block = createDescParagraph(false);
+    descEl.appendChild(block);
+    placeCaretInDescBlock(block, 0);
+    return;
+  }
+
+  const isBullet = isDescBulletBlock(block);
+  const { before, after } = getTextSplitInBlock(block, range);
+  setDescBlockText(block, before);
+
+  const newText = isBullet ? formatNewBulletLineText(after) : after;
+  const newBlock = createDescParagraph(isBullet, newText);
+  block.after(newBlock);
+
+  const caretOffset = isBullet ? descBulletCaretOffset(newText) : 0;
+  placeCaretInDescBlock(newBlock, caretOffset);
+  notifyDescEditorChange(descEl);
+}
+
+function handleDescEditorBackspace(descEl, e) {
+  const sel = window.getSelection();
+  if (!sel?.rangeCount || !sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const block = getActiveDescBlock(descEl);
+  if (!block || !isDescBulletBlock(block) || !isCaretAtBlockStart(range, block)) return;
+  if (!isEmptyBulletBlock(block)) return;
+
+  e.preventDefault();
+  const prev = block.previousElementSibling;
+  block.remove();
+  if (prev) {
+    placeCaretInDescBlock(prev, (prev.textContent || "").length);
+  } else {
+    ensureDescEditorHasBlock(descEl);
+    const first = descEl.querySelector("p, div");
+    if (first) {
+      first.className = "strats-desc-line";
+      setDescBlockText(first, "");
+      placeCaretInDescBlock(first, 0);
+    }
+  }
+  notifyDescEditorChange(descEl);
+}
+
+function bindDescEditorKeys(descEl) {
+  if (!descEl) return;
+  descEl.addEventListener("keydown", (e) => {
+    if (descEl.getAttribute("contenteditable") !== "true") return;
+    if (e.key === "Enter" && !e.shiftKey) {
+      handleDescEditorEnter(descEl, e);
+    } else if (e.key === "Backspace") {
+      handleDescEditorBackspace(descEl, e);
+    }
+  });
+}
+
 function readCardMeta(card) {
   const titleInput = card.querySelector(".strats-file-card__title-input");
   const descInput = card.querySelector(".strats-file-card__desc-input");
   return {
     title: (titleInput?.value || "").trim(),
-    description: descInput?.value ?? "",
+    description: extractDescriptionFromEditor(descInput),
   };
 }
 
-async function saveCardMeta(card, fileId) {
+async function saveCardMeta(card, groupId) {
   if (!useFirebase || isUploading || isSavingMeta) return;
-  const idx = files.findIndex((f) => f.id === fileId);
+  const idx = groups.findIndex((g) => g.id === groupId);
   if (idx < 0) return;
 
   const { title, description } = readCardMeta(card);
-  const nextTitle = title || defaultTitleFromFilename(files[idx].name);
+  const fallbackName = getSortedImages(groups[idx])[0]?.name;
+  const nextTitle = title || defaultTitleFromFilename(fallbackName);
 
-  if (files[idx].title === nextTitle && files[idx].description === description) {
+  if (groups[idx].title === nextTitle && groups[idx].description === description) {
     setCardSaveState(card, "saved");
     return;
   }
@@ -614,7 +1167,7 @@ async function saveCardMeta(card, fileId) {
   setCardSaveState(card, "saving");
 
   try {
-    files[idx] = { ...files[idx], title: nextTitle, description };
+    groups[idx] = { ...groups[idx], title: nextTitle, description };
     if (dbRef) {
       await persistMeta();
     } else {
@@ -636,7 +1189,7 @@ async function saveCardMeta(card, fileId) {
   }
 }
 
-function bindCardMetaEditors(card, file) {
+function bindCardMetaEditors(card, group) {
   const titleInput = card.querySelector(".strats-file-card__title-input");
   const descInput = card.querySelector(".strats-file-card__desc-input");
   const saveBtn = card.querySelector(".strats-file-card__save");
@@ -644,30 +1197,56 @@ function bindCardMetaEditors(card, file) {
   const onInput = () => markCardDirty(card);
   titleInput?.addEventListener("input", onInput);
   descInput?.addEventListener("input", onInput);
+  bindDescEditorAutoResize(descInput);
+  bindDescEditorKeys(descInput);
+  const descToolbar = card.querySelector(".strats-desc-toolbar");
+  bindDescFormatToolbar(descToolbar, descInput);
+
+  descInput?.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    if (document.queryCommandSupported?.("insertText")) {
+      document.execCommand("insertText", false, text);
+    } else {
+      const sel = window.getSelection();
+      if (!sel?.rangeCount) return;
+      sel.deleteFromDocument();
+      sel.getRangeAt(0).insertNode(document.createTextNode(text));
+      sel.collapseToEnd();
+    }
+  });
 
   const onBlur = () => {
     if (card.classList.contains("strats-file-card--dragging")) return;
-    void saveCardMeta(card, file.id);
+    if (descInput) {
+      syncDescEditorFromStored(descInput, extractDescriptionFromEditor(descInput));
+    }
+    void saveCardMeta(card, group.id);
   };
   titleInput?.addEventListener("blur", onBlur);
   descInput?.addEventListener("blur", onBlur);
 
-  saveBtn?.addEventListener("click", () => void saveCardMeta(card, file.id));
+  saveBtn?.addEventListener("click", () => {
+    if (descInput) {
+      syncDescEditorFromStored(descInput, extractDescriptionFromEditor(descInput));
+    }
+    void saveCardMeta(card, group.id);
+  });
 }
 
-function bindCardSideToggle(card, file) {
+function bindCardSideToggle(card, group) {
   const toggle = card.querySelector(".strats-file-card__side-toggle");
   if (!toggle) return;
   toggle.querySelectorAll(".strats-side-toggle__btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const nextSide = btn.dataset.side;
-      if (!nextSide || normalizeSide(nextSide) === normalizeSide(file.side)) return;
-      void setFileSide(file.id, nextSide);
+      if (!nextSide || normalizeSide(nextSide) === normalizeSide(group.side)) return;
+      void setGroupSide(group.id, nextSide, { switchView: true });
     });
   });
 }
 
-function bindCardDragReorder(card, file, columnCount) {
+function bindCardDragReorder(card, group, columnCount) {
   const handle = card.querySelector(".strats-file-card__drag");
   if (!handle) return;
 
@@ -676,11 +1255,11 @@ function bindCardDragReorder(card, file, columnCount) {
       e.preventDefault();
       return;
     }
-    dragSourceId = file.id;
+    dragSourceId = group.id;
     card.classList.add("strats-file-card--dragging");
     e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", file.id);
-    e.dataTransfer.setData("application/x-strat-side", normalizeSide(file.side));
+    e.dataTransfer.setData("text/plain", group.id);
+    e.dataTransfer.setData("application/x-strat-side", normalizeSide(group.side));
     if (e.dataTransfer.setDragImage) {
       e.dataTransfer.setDragImage(card, 24, 24);
     }
@@ -692,15 +1271,15 @@ function bindCardDragReorder(card, file, columnCount) {
     document.querySelectorAll(".strats-file-card--drop-target").forEach((el) => {
       el.classList.remove("strats-file-card--drop-target");
     });
-    document.querySelectorAll(".strats-side-column__list--drop-target").forEach((el) => {
-      el.classList.remove("strats-side-column__list--drop-target");
+    document.querySelectorAll(".strats-side-panel__list--drop-target").forEach((el) => {
+      el.classList.remove("strats-side-panel__list--drop-target");
     });
   });
 
   card.addEventListener("dragover", (e) => {
-    if (!dragSourceId || dragSourceId === file.id) return;
-    const source = files.find((f) => f.id === dragSourceId);
-    if (!source || normalizeSide(source.side) !== normalizeSide(file.side)) return;
+    if (!dragSourceId || dragSourceId === group.id) return;
+    const source = groups.find((g) => g.id === dragSourceId);
+    if (!source || normalizeSide(source.side) !== normalizeSide(group.side)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     card.classList.add("strats-file-card--drop-target");
@@ -716,25 +1295,25 @@ function bindCardDragReorder(card, file, columnCount) {
     e.preventDefault();
     card.classList.remove("strats-file-card--drop-target");
     const sourceId = e.dataTransfer.getData("text/plain") || dragSourceId;
-    if (sourceId && sourceId !== file.id) {
-      void reorderFiles(sourceId, file.id);
+    if (sourceId && sourceId !== group.id) {
+      void reorderGroups(sourceId, group.id);
     }
     dragSourceId = null;
   });
 }
 
-async function setFileSide(fileId, newSide) {
+async function setGroupSide(groupId, newSide, options = {}) {
   if (!useFirebase || isUploading || isSavingMeta) return;
   const side = normalizeSide(newSide);
-  const idx = files.findIndex((f) => f.id === fileId);
-  if (idx < 0 || normalizeSide(files[idx].side) === side) return;
+  const idx = groups.findIndex((g) => g.id === groupId);
+  if (idx < 0 || normalizeSide(groups[idx].side) === side) return;
 
-  const attackList = getSortedFiles("attack").filter((f) => f.id !== fileId);
-  const defenceList = getSortedFiles("defence").filter((f) => f.id !== fileId);
-  const moved = { ...files[idx], side };
+  const attackList = getSortedGroups("attack").filter((g) => g.id !== groupId);
+  const defenceList = getSortedGroups("defence").filter((g) => g.id !== groupId);
+  const moved = { ...groups[idx], side };
   if (side === "attack") attackList.push(moved);
   else defenceList.push(moved);
-  files = mergeSideLists(attackList, defenceList);
+  groups = mergeSideLists(attackList, defenceList);
 
   isSavingMeta = true;
   try {
@@ -743,7 +1322,11 @@ async function setFileSide(fileId, newSide) {
     } else {
       await persistMetaViaRest();
     }
-    renderFiles();
+    if (options.switchView) {
+      setActiveSide(side, { syncUpload: true });
+    } else {
+      renderGroups();
+    }
     setSyncStatus("live");
   } catch (err) {
     console.error("[strats side]", err);
@@ -758,27 +1341,27 @@ async function setFileSide(fileId, newSide) {
   }
 }
 
-async function reorderFiles(sourceId, targetId) {
+async function reorderGroups(sourceId, targetId) {
   if (!useFirebase || isUploading || isSavingMeta || sourceId === targetId) return;
 
-  const sourceFile = files.find((f) => f.id === sourceId);
-  const targetFile = files.find((f) => f.id === targetId);
-  if (!sourceFile || !targetFile) return;
-  if (normalizeSide(sourceFile.side) !== normalizeSide(targetFile.side)) return;
+  const sourceGroup = groups.find((g) => g.id === sourceId);
+  const targetGroup = groups.find((g) => g.id === targetId);
+  if (!sourceGroup || !targetGroup) return;
+  if (normalizeSide(sourceGroup.side) !== normalizeSide(targetGroup.side)) return;
 
-  const side = normalizeSide(sourceFile.side);
-  const sorted = getSortedFiles(side);
-  const from = sorted.findIndex((f) => f.id === sourceId);
-  const to = sorted.findIndex((f) => f.id === targetId);
+  const side = normalizeSide(sourceGroup.side);
+  const sorted = getSortedGroups(side);
+  const from = sorted.findIndex((g) => g.id === sourceId);
+  const to = sorted.findIndex((g) => g.id === targetId);
   if (from < 0 || to < 0) return;
 
   const next = [...sorted];
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
 
-  const attackList = side === "attack" ? next : getSortedFiles("attack");
-  const defenceList = side === "defence" ? next : getSortedFiles("defence");
-  files = mergeSideLists(attackList, defenceList);
+  const attackList = side === "attack" ? next : getSortedGroups("attack");
+  const defenceList = side === "defence" ? next : getSortedGroups("defence");
+  groups = mergeSideLists(attackList, defenceList);
 
   isSavingMeta = true;
   try {
@@ -787,7 +1370,7 @@ async function reorderFiles(sourceId, targetId) {
     } else {
       await persistMetaViaRest();
     }
-    renderFiles();
+    renderGroups();
     setSyncStatus("live");
   } catch (err) {
     console.error("[strats reorder]", err);
@@ -802,84 +1385,134 @@ async function reorderFiles(sourceId, targetId) {
   }
 }
 
-function appendPreview(file, container, label) {
-  if (file.downloadURL && file.type === "image") {
-    const img = document.createElement("img");
-    img.className = "strats-file-card__img";
-    img.src = file.downloadURL;
-    img.alt = label || "Strat-Bild";
-    img.loading = "lazy";
-    img.tabIndex = 0;
-    img.addEventListener("click", () => openLightbox(file.downloadURL, label));
-    img.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        openLightbox(file.downloadURL, label);
-      }
-    });
-    container.appendChild(img);
-  } else if (file.downloadURL && file.type === "pdf") {
-    const iframe = document.createElement("iframe");
-    iframe.className = "strats-file-card__pdf";
-    iframe.src = file.downloadURL;
-    iframe.title = label || "PDF";
-    container.appendChild(iframe);
-  } else if (!file.downloadURL) {
+let lightboxGroupId = null;
+let lightboxImageIndex = 0;
+let addImagesTargetGroupId = null;
+
+function getGroupLightboxImages(group) {
+  return getSortedImages(group).filter((img) => img.downloadURL && img.type === "image");
+}
+
+function appendGallery(group, container, label) {
+  const images = getSortedImages(group);
+  if (!images.length) {
     const p = document.createElement("p");
-    p.className = "strats-file-card__unavailable";
-    p.textContent = "Vorschau nicht verfügbar";
+    p.className = "strats-gallery__empty";
+    p.textContent = "Noch keine Dateien in diesem Strat.";
     container.appendChild(p);
+    return;
   }
+
+  const grid = document.createElement("div");
+  grid.className = `strats-gallery ${galleryLayoutClass(images.length)}`;
+  grid.setAttribute("role", "list");
+
+  const lightboxImages = getGroupLightboxImages(group);
+
+  images.forEach((image, index) => {
+    const item = document.createElement("div");
+    item.className = "strats-gallery__item";
+    item.setAttribute("role", "listitem");
+
+    const badge = document.createElement("span");
+    badge.className = "strats-gallery__badge";
+    badge.textContent = String(index + 1);
+    item.appendChild(badge);
+
+    if (image.downloadURL && image.type === "image") {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "strats-gallery__thumb-btn";
+      const img = document.createElement("img");
+      img.className = "strats-gallery__thumb";
+      img.src = image.downloadURL;
+      img.alt = `${label} — Bild ${index + 1}`;
+      img.loading = "lazy";
+      btn.appendChild(img);
+      const lbIndex = lightboxImages.findIndex((i) => i.id === image.id);
+      btn.addEventListener("click", () => {
+        if (lbIndex >= 0) openLightboxForGroup(group.id, lbIndex);
+      });
+      item.appendChild(btn);
+    } else if (image.downloadURL && image.type === "pdf") {
+      const pdfLink = document.createElement("a");
+      pdfLink.className = "strats-gallery__pdf";
+      pdfLink.href = image.downloadURL;
+      pdfLink.target = "_blank";
+      pdfLink.rel = "noopener";
+      pdfLink.textContent = "PDF öffnen";
+      item.appendChild(pdfLink);
+    } else {
+      const placeholder = document.createElement("span");
+      placeholder.className = "strats-gallery__placeholder";
+      placeholder.textContent = "—";
+      item.appendChild(placeholder);
+    }
+
+    if (useFirebase && useStorage && !isUploading) {
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "strats-gallery__remove";
+      removeBtn.textContent = "Aus Strat entfernen";
+      removeBtn.title = "Datei aus diesem Strat entfernen";
+      removeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void removeImageFromGroup(group.id, image.id);
+      });
+      item.appendChild(removeBtn);
+    }
+
+    grid.appendChild(item);
+  });
+
+  container.appendChild(grid);
+}
+
+function updateSideToggleButtons(container, active) {
+  if (!container) return;
+  const side = normalizeSide(active);
+  container.querySelectorAll(".strats-side-toggle__btn").forEach((btn) => {
+    const isActive = btn.dataset.side === side;
+    btn.classList.toggle("is-active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+    if (btn.getAttribute("role") === "tab") {
+      btn.setAttribute("aria-selected", isActive ? "true" : "false");
+    }
+  });
 }
 
 function updateUploadSidePicker() {
-  const picker = document.getElementById("uploadSidePicker");
-  if (!picker) return;
-  picker.querySelectorAll(".strats-side-toggle__btn").forEach((btn) => {
-    const active = btn.dataset.side === uploadSide;
-    btn.classList.toggle("is-active", active);
-    btn.setAttribute("aria-pressed", active ? "true" : "false");
-  });
+  updateSideToggleButtons(document.getElementById("uploadSidePicker"), uploadSide);
 }
 
-function bindColumnDropTarget(listEl, side) {
-  if (!listEl || listEl.dataset.dropBound === "1") return;
-  listEl.dataset.dropBound = "1";
-
-  listEl.addEventListener("dragover", (e) => {
-    if (!dragSourceId) return;
-    const source = files.find((f) => f.id === dragSourceId);
-    if (!source || normalizeSide(source.side) === normalizeSide(side)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    listEl.classList.add("strats-side-column__list--drop-target");
-  });
-
-  listEl.addEventListener("dragleave", (e) => {
-    if (!listEl.contains(e.relatedTarget)) {
-      listEl.classList.remove("strats-side-column__list--drop-target");
-    }
-  });
-
-  listEl.addEventListener("drop", (e) => {
-    if (e.target.closest(".strats-file-card")) return;
-    e.preventDefault();
-    listEl.classList.remove("strats-side-column__list--drop-target");
-    const sourceId = e.dataTransfer.getData("text/plain") || dragSourceId;
-    if (!sourceId) return;
-    const source = files.find((f) => f.id === sourceId);
-    if (!source) return;
-    if (normalizeSide(source.side) === normalizeSide(side)) return;
-    void setFileSide(sourceId, side);
-    dragSourceId = null;
-  });
+function updateMapSideToggle() {
+  updateSideToggleButtons(document.getElementById("mapSideToggle"), activeSide);
+  const panel = document.getElementById("stratsSidePanel");
+  const listEl = document.getElementById("fileList");
+  const tabId = activeSide === "defence" ? "mapSideTabDefence" : "mapSideTabAttack";
+  if (panel) panel.setAttribute("aria-labelledby", tabId);
+  if (listEl) listEl.dataset.side = activeSide;
 }
 
-function renderFileCard(file, sortedInColumn, canEdit, listEl) {
-    const label = displayLabel(file);
+function setActiveSide(side, options = {}) {
+  activeSide = normalizeSide(side);
+  if (options.syncUpload !== false) {
+    uploadSide = activeSide;
+    updateUploadSidePicker();
+  }
+  updateMapSideToggle();
+  renderGroups();
+}
+
+function emptyHintForSide(side) {
+  return side === "defence" ? "Noch keine Defence-Strats." : "Noch keine Attack-Strats.";
+}
+
+function renderGroupCard(group, sortedInColumn, canEdit, listEl) {
+    const label = displayLabel(group);
     const card = document.createElement("article");
     card.className = "strats-file-card";
-    card.dataset.id = file.id;
+    card.dataset.id = group.id;
 
     const dragBtn = document.createElement("button");
     dragBtn.type = "button";
@@ -895,39 +1528,6 @@ function renderFileCard(file, sortedInColumn, canEdit, listEl) {
     const layout = document.createElement("div");
     layout.className = "strats-file-card__layout";
 
-    const thumb = document.createElement("div");
-    thumb.className = "strats-file-card__thumb";
-    if (file.downloadURL && file.type === "image") {
-      const thumbImg = document.createElement("img");
-      thumbImg.className = "strats-file-card__thumb-img";
-      thumbImg.src = file.downloadURL;
-      thumbImg.alt = label;
-      thumbImg.loading = "lazy";
-      thumbImg.tabIndex = 0;
-      thumbImg.addEventListener("click", () => openLightbox(file.downloadURL, label));
-      thumbImg.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          openLightbox(file.downloadURL, label);
-        }
-      });
-      thumb.appendChild(thumbImg);
-    } else if (file.downloadURL && file.type === "pdf") {
-      const thumbLink = document.createElement("a");
-      thumbLink.className = "strats-file-card__thumb-pdf";
-      thumbLink.href = file.downloadURL;
-      thumbLink.target = "_blank";
-      thumbLink.rel = "noopener";
-      thumbLink.textContent = "PDF";
-      thumb.appendChild(thumbLink);
-    } else {
-      const thumbPlaceholder = document.createElement("span");
-      thumbPlaceholder.className = "strats-file-card__thumb-placeholder";
-      thumbPlaceholder.textContent = "—";
-      thumb.appendChild(thumbPlaceholder);
-    }
-    layout.appendChild(thumb);
-
     const content = document.createElement("div");
     content.className = "strats-file-card__content";
 
@@ -935,42 +1535,50 @@ function renderFileCard(file, sortedInColumn, canEdit, listEl) {
     titleField.className = "strats-file-card__field";
     const titleLabel = document.createElement("label");
     titleLabel.className = "strats-file-card__label";
-    titleLabel.htmlFor = `title-${file.id}`;
+    titleLabel.htmlFor = `title-${group.id}`;
     titleLabel.textContent = "Titel";
     const titleInput = document.createElement("input");
     titleInput.type = "text";
-    titleInput.id = `title-${file.id}`;
+    titleInput.id = `title-${group.id}`;
     titleInput.className = "strats-file-card__title-input";
-    titleInput.value = file.title || defaultTitleFromFilename(file.name);
+    titleInput.value =
+      group.title || defaultTitleFromFilename(getSortedImages(group)[0]?.name);
     titleInput.disabled = !canEdit || isUploading;
+    setPlainTextInputAttrs(titleInput);
     titleField.appendChild(titleLabel);
     titleField.appendChild(titleInput);
     content.appendChild(titleField);
 
     const descField = document.createElement("div");
     descField.className = "strats-file-card__field";
-    const descLabel = document.createElement("label");
+    const descLabel = document.createElement("span");
     descLabel.className = "strats-file-card__label";
-    descLabel.htmlFor = `desc-${file.id}`;
+    descLabel.id = `desc-label-${group.id}`;
     descLabel.textContent = "Beschreibung";
-    const descInput = document.createElement("textarea");
-    descInput.id = `desc-${file.id}`;
-    descInput.className = "strats-file-card__desc-input";
-    descInput.rows = 3;
-    descInput.placeholder = "Notizen, Callouts, Setup …";
-    descInput.value = file.description || "";
-    descInput.disabled = !canEdit || isUploading;
+    const descHint = document.createElement("span");
+    descHint.className = "strats-file-card__field-hint";
+    descHint.textContent = "Stichpunkte mit „- “ oder „• “ am Zeilenanfang";
+    const descToolbar = createDescFormatToolbar(canEdit && !isUploading);
+    const descInput = document.createElement("div");
+    descInput.id = `desc-${group.id}`;
+    descInput.className = "strats-file-card__desc-input strats-desc-editor";
+    descInput.setAttribute("role", "textbox");
+    descInput.setAttribute("aria-multiline", "true");
+    descInput.setAttribute("aria-labelledby", descLabel.id);
+    descInput.setAttribute("lang", "en");
+    setPlainTextInputAttrs(descInput);
+    descInput.dataset.placeholder = "Notizen, Callouts … (Stichpunkte mit - beginnen)";
+    descInput.contentEditable = canEdit && !isUploading ? "true" : "false";
+    syncDescEditorFromStored(descInput, group.description || "");
     descField.appendChild(descLabel);
+    descField.appendChild(descHint);
+    descField.appendChild(descToolbar);
     descField.appendChild(descInput);
     content.appendChild(descField);
 
     const meta = document.createElement("p");
     meta.className = "strats-file-card__meta";
-    const typeLabel = file.type === "pdf" ? "PDF" : file.type === "image" ? "Bild" : "Datei";
-    const fileRef = file.name ? `Datei: ${file.name}` : "";
-    meta.textContent = [typeLabel, formatDate(file.uploadedAt), fileRef]
-      .filter(Boolean)
-      .join(" · ");
+    meta.textContent = groupMetaSummary(group);
     content.appendChild(meta);
 
     const sideField = document.createElement("div");
@@ -989,7 +1597,7 @@ function renderFileCard(file, sortedInColumn, canEdit, listEl) {
       sideBtn.dataset.side = sideKey;
       sideBtn.textContent = SIDE_LABELS[sideKey];
       sideBtn.disabled = !canEdit || isUploading;
-      if (normalizeSide(file.side) === sideKey) {
+      if (normalizeSide(group.side) === sideKey) {
         sideBtn.classList.add("is-active");
         sideBtn.setAttribute("aria-pressed", "true");
       } else {
@@ -1012,73 +1620,77 @@ function renderFileCard(file, sortedInColumn, canEdit, listEl) {
     saveBtn.disabled = !canEdit || isUploading;
     actions.appendChild(saveBtn);
 
-    if (file.downloadURL) {
+    const firstWithUrl = getSortedImages(group).find((i) => i.downloadURL);
+    if (firstWithUrl?.downloadURL) {
       const openLink = document.createElement("a");
       openLink.className = "btn-secondary strats-file-card__open";
-      openLink.href = file.downloadURL;
+      openLink.href = firstWithUrl.downloadURL;
       openLink.target = "_blank";
       openLink.rel = "noopener";
       openLink.textContent = "Öffnen";
       actions.appendChild(openLink);
     }
 
+    if (useFirebase && useStorage) {
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "btn-secondary strats-file-card__add-images";
+      addBtn.textContent = "Weitere Bilder hinzufügen";
+      addBtn.disabled = isUploading;
+      actions.appendChild(addBtn);
+    }
+
     const delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.className = "btn-secondary strats-file-card__delete";
-    delBtn.textContent = "Löschen";
+    delBtn.textContent = "Strat löschen";
     delBtn.disabled = isUploading || !useFirebase || !useStorage;
-    delBtn.addEventListener("click", () => deleteFile(file));
     actions.appendChild(delBtn);
 
     content.appendChild(actions);
     layout.appendChild(content);
     card.appendChild(layout);
 
-    const preview = document.createElement("div");
-    preview.className = "strats-file-card__preview";
-    appendPreview(file, preview, label);
-    card.appendChild(preview);
+    const galleryWrap = document.createElement("div");
+    galleryWrap.className = "strats-file-card__gallery";
+    appendGallery(group, galleryWrap, label);
+    card.appendChild(galleryWrap);
 
-    bindCardMetaEditors(card, file);
-    bindCardSideToggle(card, file);
-    bindCardDragReorder(card, file, sortedInColumn.length);
+    bindCardMetaEditors(card, group);
+    bindCardSideToggle(card, group);
+    bindCardDragReorder(card, group, sortedInColumn.length);
     listEl.appendChild(card);
 }
 
-function renderFiles() {
-  const listAttack = document.getElementById("fileListAttack");
-  const listDefence = document.getElementById("fileListDefence");
+function renderGroups() {
+  const listEl = document.getElementById("fileList");
   const empty = document.getElementById("emptyHint");
-  const emptyAttack = document.getElementById("emptyHintAttack");
-  const emptyDefence = document.getElementById("emptyHintDefence");
-  if (!listAttack || !listDefence) return;
+  const emptySide = document.getElementById("emptyHintSide");
+  if (!listEl) return;
 
-  listAttack.innerHTML = "";
-  listDefence.innerHTML = "";
+  listEl.innerHTML = "";
 
-  const attackFiles = getSortedFiles("attack");
-  const defenceFiles = getSortedFiles("defence");
-  const totalCount = attackFiles.length + defenceFiles.length;
+  const attackGroups = getSortedGroups("attack");
+  const defenceGroups = getSortedGroups("defence");
+  const totalCount = attackGroups.length + defenceGroups.length;
+  const side = normalizeSide(activeSide);
+  const sideGroups = side === "defence" ? defenceGroups : attackGroups;
   const canEdit = useFirebase && totalCount > 0;
 
   if (empty) empty.hidden = totalCount > 0;
-  if (emptyAttack) emptyAttack.hidden = attackFiles.length > 0;
-  if (emptyDefence) emptyDefence.hidden = defenceFiles.length > 0;
+  if (emptySide) {
+    emptySide.hidden = sideGroups.length > 0;
+    emptySide.textContent = emptyHintForSide(side);
+  }
 
-  const showReorder =
-    canEdit &&
-    (attackFiles.length > 1 || defenceFiles.length > 1);
+  const showReorder = canEdit && sideGroups.length > 1;
   setReorderHintVisible(showReorder);
 
-  for (const file of attackFiles) {
-    renderFileCard(file, attackFiles, canEdit, listAttack);
-  }
-  for (const file of defenceFiles) {
-    renderFileCard(file, defenceFiles, canEdit, listDefence);
+  for (const group of sideGroups) {
+    renderGroupCard(group, sideGroups, canEdit, listEl);
   }
 
-  bindColumnDropTarget(listAttack, "attack");
-  bindColumnDropTarget(listDefence, "defence");
+  updateMapSideToggle();
   updateUploadSidePicker();
 }
 
@@ -1096,15 +1708,70 @@ const LIGHTBOX_DEBUG_IMAGE =
       "</svg>"
   );
 
+function updateLightboxNav() {
+  const group = groups.find((g) => g.id === lightboxGroupId);
+  const images = group ? getGroupLightboxImages(group) : [];
+  const prevBtn = document.getElementById("lightboxPrev");
+  const nextBtn = document.getElementById("lightboxNext");
+  const counter = document.getElementById("lightboxCounter");
+  const showNav = images.length > 1;
+  if (prevBtn) {
+    prevBtn.hidden = !showNav;
+    prevBtn.disabled = !showNav;
+  }
+  if (nextBtn) {
+    nextBtn.hidden = !showNav;
+    nextBtn.disabled = !showNav;
+  }
+  if (counter) {
+    counter.hidden = !showNav;
+    counter.textContent = showNav ? `${lightboxImageIndex + 1} / ${images.length}` : "";
+  }
+}
+
+function showLightboxImage(group, index) {
+  const images = getGroupLightboxImages(group);
+  if (!images.length) return;
+  const safeIndex = ((index % images.length) + images.length) % images.length;
+  const image = images[safeIndex];
+  const box = document.getElementById("lightbox");
+  const imgEl = document.getElementById("lightboxImg");
+  if (!box || !imgEl || !image?.downloadURL) return;
+  lightboxGroupId = group.id;
+  lightboxImageIndex = safeIndex;
+  imgEl.src = image.downloadURL;
+  imgEl.alt = `${displayLabel(group)} — Bild ${safeIndex + 1}`;
+  box.hidden = false;
+  document.body.classList.add("strats-lightbox-open");
+  updateLightboxNav();
+}
+
+function openLightboxForGroup(groupId, imageIndex) {
+  const group = groups.find((g) => g.id === groupId);
+  if (!group) return;
+  showLightboxImage(group, imageIndex ?? 0);
+  document.getElementById("lightboxCloseBtn")?.focus();
+}
+
 function openLightbox(url, alt) {
   const box = document.getElementById("lightbox");
   const img = document.getElementById("lightboxImg");
   if (!box || !img) return;
+  lightboxGroupId = null;
+  lightboxImageIndex = 0;
   img.src = url;
   img.alt = alt || "";
   box.hidden = false;
   document.body.classList.add("strats-lightbox-open");
+  updateLightboxNav();
   document.getElementById("lightboxCloseBtn")?.focus();
+}
+
+function navigateLightbox(delta) {
+  if (!lightboxGroupId) return;
+  const group = groups.find((g) => g.id === lightboxGroupId);
+  if (!group) return;
+  showLightboxImage(group, lightboxImageIndex + delta);
 }
 
 function closeLightbox() {
@@ -1113,7 +1780,10 @@ function closeLightbox() {
   if (!box || !img || box.hidden) return;
   box.hidden = true;
   img.removeAttribute("src");
+  lightboxGroupId = null;
+  lightboxImageIndex = 0;
   document.body.classList.remove("strats-lightbox-open");
+  updateLightboxNav();
 }
 
 function onLightboxCloseClick(e) {
@@ -1142,17 +1812,33 @@ function initLightboxControls() {
     };
   }
 
+  document.getElementById("lightboxPrev")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    navigateLightbox(-1);
+  });
+  document.getElementById("lightboxNext")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    navigateLightbox(1);
+  });
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && isLightboxOpen()) {
+    if (!isLightboxOpen()) return;
+    if (e.key === "Escape") {
       e.preventDefault();
       closeLightbox();
+    } else if (e.key === "ArrowLeft" && lightboxGroupId) {
+      e.preventDefault();
+      navigateLightbox(-1);
+    } else if (e.key === "ArrowRight" && lightboxGroupId) {
+      e.preventDefault();
+      navigateLightbox(1);
     }
   });
 }
 
 async function persistMeta() {
   if (!dbRef) return;
-  await dbRef.set(files);
+  await dbRef.set(groups);
 }
 
 async function fetchMetaViaRest() {
@@ -1165,7 +1851,7 @@ async function fetchMetaViaRest() {
     throw err;
   }
   const data = await res.json();
-  return normalizeFilesList(data);
+  return normalizeGroupsList(data);
 }
 
 async function persistMetaViaRest() {
@@ -1173,7 +1859,7 @@ async function persistMetaViaRest() {
   const res = await fetch(url, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(files),
+    body: JSON.stringify(groups),
   });
   if (!res.ok) {
     const err = new Error(`http_${res.status}`);
@@ -1182,9 +1868,11 @@ async function persistMetaViaRest() {
   }
 }
 
-function applyRemoteFiles(remote) {
-  files = migrateAndSortFilesList(remote);
-  renderFiles();
+function applyRemoteGroups(remote) {
+  groups = migrateAndSortGroupsList(remote);
+  if (!isUploading) {
+    renderGroups();
+  }
   setSyncStatus("live");
 }
 
@@ -1199,7 +1887,7 @@ function finishFirebaseBootstrap(remote, source) {
   if (firebaseBootstrapped) return;
   firebaseBootstrapped = true;
   clearFirebaseSdkTimer();
-  applyRemoteFiles(remote);
+  applyRemoteGroups(remote);
   console.info("[firebase strats] bootstrap via", source);
 }
 
@@ -1208,8 +1896,8 @@ function failFirebaseStartup(err) {
   console.error("[firebase strats] startup failed", err?.code, err?.message || err);
   if (!firebaseBootstrapped) {
     firebaseBootstrapped = true;
-    files = [];
-    renderFiles();
+    groups = [];
+    renderGroups();
   }
   const isRules =
     err?.code === "PERMISSION_DENIED" || err?.code === "permission_denied";
@@ -1236,7 +1924,7 @@ function attachFirebaseRealtimeListener() {
         finishFirebaseBootstrap(snapshot.val(), "sdk-value");
         return;
       }
-      applyRemoteFiles(snapshot.val());
+      applyRemoteGroups(snapshot.val());
     },
     (err) => {
       console.error("[firebase strats] on(value) error", err?.code, err?.message);
@@ -1318,6 +2006,20 @@ function setFileInputEnabled(enabled) {
   if (input) input.disabled = !enabled;
 }
 
+/** Re-enable inputs and refresh cards after upload/delete (avoids stuck disabled UI). */
+function resetUploadUi() {
+  isUploading = false;
+  setFileInputEnabled(useStorage && !isFileProtocol());
+  const fileInput = document.getElementById("fileInput");
+  if (fileInput) fileInput.value = "";
+  const addImagesInput = document.getElementById("addImagesInput");
+  if (addImagesInput) {
+    addImagesInput.disabled = false;
+    addImagesInput.value = "";
+  }
+  renderGroups();
+}
+
 function initLocalOnly() {
   useFirebase = false;
   useStorage = false;
@@ -1326,7 +2028,7 @@ function initLocalOnly() {
   setBannerVisible("fileProtocolBanner", isFileProtocol());
   setSyncStatus("local");
   setFileInputEnabled(false);
-  renderFiles();
+  renderGroups();
 }
 
 function validateSelectedFile(file) {
@@ -1343,13 +2045,12 @@ function validateSelectedFile(file) {
   return null;
 }
 
-async function uploadOneFile(file, progressBase) {
+async function uploadFileToStorage(file, imageId, progressBase) {
   const validationErr = validateSelectedFile(file);
   if (validationErr) throw new Error(validationErr);
 
-  const id = uniqueId();
   const type = fileTypeFromName(file.name);
-  const path = storagePathFor(id, file.name);
+  const path = storagePathFor(imageId, file.name);
   const objectRef = storageRef.child(path);
 
   const uploadTask = objectRef.put(file, { contentType: contentTypeForFile(file) });
@@ -1422,23 +2123,17 @@ async function uploadOneFile(file, progressBase) {
   });
 
   const downloadURL = await objectRef.getDownloadURL();
-  const side = normalizeSide(uploadSide);
-  const sideFiles = getSortedFiles(side);
-  const maxOrder = sideFiles.reduce((max, f) => Math.max(max, Number(f.order) || 0), -1);
-  const entry = {
-    id,
+  return {
+    id: imageId,
     name: file.name,
-    title: defaultTitleFromFilename(file.name),
-    description: "",
-    side,
-    order: maxOrder + 1,
     storagePath: path,
     downloadURL,
     type,
     uploadedAt: new Date().toISOString(),
   };
+}
 
-  files = [...files, entry];
+async function persistGroupsAfterUpload(uploadedImagePaths) {
   try {
     if (dbRef) {
       await persistMeta();
@@ -1446,12 +2141,116 @@ async function uploadOneFile(file, progressBase) {
       await persistMetaViaRest();
     }
   } catch (metaErr) {
-    await objectRef.delete().catch(() => {});
-    files = files.filter((f) => f.id !== id);
+    if (uploadedImagePaths?.length && storageRef) {
+      for (const storagePath of uploadedImagePaths) {
+        await storageRef.child(storagePath).delete().catch(() => {});
+      }
+    }
     throw metaErr;
   }
-  renderFiles();
-  return entry;
+  if (!isUploading) {
+    renderGroups();
+  }
+}
+
+async function uploadImagesToGroup(groupId, fileList, progressLabelBase) {
+  const idx = groups.findIndex((g) => g.id === groupId);
+  if (idx < 0) throw new Error("Strat nicht gefunden.");
+
+  const valid = [];
+  const preflightErrors = [];
+  for (const file of fileList) {
+    const err = validateSelectedFile(file);
+    if (err) preflightErrors.push(err);
+    else valid.push(file);
+  }
+  if (!valid.length) {
+    if (preflightErrors.length) throw new Error(preflightErrors.join("\n"));
+    return;
+  }
+
+  const existingImages = getSortedImages(groups[idx]);
+  const startOrder = existingImages.length;
+  const newImages = [];
+  const uploadedPaths = [];
+  let done = 0;
+
+  for (const file of valid) {
+    const imageId = uniqueId();
+    const progressBase =
+      progressLabelBase ||
+      `Upload ${done + 1} von ${valid.length}: ${file.name}`;
+    try {
+      const imageEntry = await uploadFileToStorage(file, imageId, progressBase);
+      imageEntry.order = startOrder + done;
+      newImages.push(imageEntry);
+      uploadedPaths.push(imageEntry.storagePath);
+      done += 1;
+    } catch (e) {
+      for (const path of uploadedPaths) {
+        await storageRef.child(path).delete().catch(() => {});
+      }
+      throw e;
+    }
+  }
+
+  groups[idx] = {
+    ...groups[idx],
+    images: reindexImageOrders([...existingImages, ...newImages]),
+  };
+  await persistGroupsAfterUpload(uploadedPaths);
+}
+
+async function uploadNewGroup(fileList, progressLabelBase) {
+  const valid = [];
+  const preflightErrors = [];
+  for (const file of fileList) {
+    const err = validateSelectedFile(file);
+    if (err) preflightErrors.push(err);
+    else valid.push(file);
+  }
+  if (!valid.length) {
+    if (preflightErrors.length) throw new Error(preflightErrors.join("\n"));
+    return;
+  }
+
+  const groupId = uniqueId();
+  const side = normalizeSide(uploadSide);
+  const sideGroups = getSortedGroups(side);
+  const maxOrder = sideGroups.reduce((max, g) => Math.max(max, Number(g.order) || 0), -1);
+  const images = [];
+  const uploadedPaths = [];
+  let done = 0;
+
+  for (const file of valid) {
+    const imageId = uniqueId();
+    const progressBase =
+      progressLabelBase ||
+      `Upload ${done + 1} von ${valid.length}: ${file.name}`;
+    const imageEntry = await uploadFileToStorage(file, imageId, progressBase);
+    imageEntry.order = done;
+    images.push(imageEntry);
+    uploadedPaths.push(imageEntry.storagePath);
+    done += 1;
+  }
+
+  const group = {
+    id: groupId,
+    title: defaultTitleFromFilename(valid[0].name),
+    description: "",
+    side,
+    order: maxOrder + 1,
+    images: reindexImageOrders(images),
+  };
+
+  groups = [...groups, group];
+  try {
+    await persistGroupsAfterUpload(uploadedPaths);
+  } catch (metaErr) {
+    groups = groups.filter((g) => g.id !== groupId);
+    throw metaErr;
+  }
+  return group;
 }
 
 async function onFilesSelected(fileList) {
@@ -1500,33 +2299,30 @@ async function onFilesSelected(fileList) {
   let storageFailed = false;
   let lastUploadErr = null;
 
-  for (const file of valid) {
-    const progressBase = `Upload ${done + 1} von ${valid.length}: ${file.name}`;
-    try {
-      await uploadOneFile(file, progressBase);
-      done += 1;
-    } catch (e) {
-      console.error("[strats upload]", e?.code, e?.message || e);
-      if (e?.code === "upload/timeout") {
-        console.error(
-          "[strats upload] 0 % timeout — prüfen:",
-          FIREBASE_STORAGE_CONSOLE,
-          "storageBucket:",
-          window.FIREBASE_CONFIG?.storageBucket
-        );
-      }
-      lastUploadErr = e;
-      errors.push(formatUploadError(e));
-      if (isStorageSetupError(e)) storageFailed = true;
+  try {
+    await uploadNewGroup(valid, `Upload Strat (${valid.length} Datei${valid.length > 1 ? "en" : ""})`);
+    done = valid.length;
+  } catch (e) {
+    console.error("[strats upload]", e?.code, e?.message || e);
+    if (e?.code === "upload/timeout") {
+      console.error(
+        "[strats upload] 0 % timeout — prüfen:",
+        FIREBASE_STORAGE_CONSOLE,
+        "storageBucket:",
+        window.FIREBASE_CONFIG?.storageBucket
+      );
     }
+    lastUploadErr = e;
+    errors.push(formatUploadError(e));
+    if (isStorageSetupError(e)) storageFailed = true;
   }
 
   if (done > 0 && done === valid.length) {
     setUploadProgress({
       message:
         done === 1
-          ? "1 Datei erfolgreich hochgeladen."
-          : `${done} Dateien erfolgreich hochgeladen.`,
+          ? "1 Strat erfolgreich hochgeladen."
+          : `Strat mit ${done} Bildern erfolgreich hochgeladen.`,
       percent: 100,
       visible: true,
       success: true,
@@ -1535,11 +2331,7 @@ async function onFilesSelected(fileList) {
   } else {
     setUploadProgress({ visible: false });
   }
-  isUploading = false;
-  if (input) {
-    input.disabled = !useStorage || isFileProtocol();
-    input.value = "";
-  }
+  resetUploadUi();
   setSyncStatus(useFirebase ? "live" : "offline");
 
   if (storageFailed) {
@@ -1550,11 +2342,69 @@ async function onFilesSelected(fileList) {
   }
 }
 
-async function deleteFile(file) {
-  if (!file?.id) return;
+function triggerAddImagesToGroup(groupId) {
+  if (!useFirebase || !useStorage || isUploading) return;
+  addImagesTargetGroupId = groupId;
+  const input = document.getElementById("addImagesInput");
+  if (input) {
+    input.value = "";
+    input.click();
+  }
+}
+
+async function onAddImagesSelected(fileList) {
+  const groupId = addImagesTargetGroupId;
+  addImagesTargetGroupId = null;
+  if (!groupId || !fileList?.length) return;
+
+  setUploadError("", false);
+  if (!useFirebase || !useStorage || !storageRef) {
+    setUploadError("Upload nicht möglich.", true);
+    return;
+  }
+
+  isUploading = true;
+  setSyncStatus("uploading");
+  const input = document.getElementById("addImagesInput");
+  if (input) input.disabled = true;
+
+  try {
+    await uploadImagesToGroup(groupId, Array.from(fileList), "Weitere Bilder");
+    setUploadProgress({
+      message: "Bilder zum Strat hinzugefügt.",
+      percent: 100,
+      visible: true,
+      success: true,
+    });
+    window.setTimeout(() => setUploadProgress({ visible: false }), 3500);
+    setSyncStatus("live");
+  } catch (err) {
+    console.error("[strats add images]", err);
+    setUploadError(formatUploadError(err), true);
+    if (isStorageSetupError(err)) {
+      showStorageSetupBanner();
+      void checkStorageStatus();
+    }
+    setSyncStatus(
+      err?.code === "PERMISSION_DENIED" || err?.code === "storage/unauthorized"
+        ? "error-rules"
+        : "offline"
+    );
+  } finally {
+    resetUploadUi();
+  }
+}
+
+async function removeImageFromGroup(groupId, imageId) {
+  const idx = groups.findIndex((g) => g.id === groupId);
+  if (idx < 0) return;
+  const images = getSortedImages(groups[idx]);
+  const image = images.find((i) => i.id === imageId);
+  if (!image) return;
+
   if (
     !confirm(
-      `„${displayLabel(file)}" wirklich löschen? Das kann nicht rückgängig gemacht werden.`
+      `„${image.name || "Datei"}" aus „${displayLabel(groups[idx])}" entfernen?`
     )
   ) {
     return;
@@ -1566,23 +2416,83 @@ async function deleteFile(file) {
   setSyncStatus("uploading");
 
   try {
-    if (file.storagePath && storageRef) {
-      await storageRef.child(file.storagePath).delete().catch((err) => {
+    if (image.storagePath && storageRef) {
+      await storageRef.child(image.storagePath).delete().catch((err) => {
         if (err?.code !== "storage/object-not-found") throw err;
       });
     }
 
-    const remaining = files.filter((f) => f.id !== file.id);
-    files = mergeSideLists(
-      remaining.filter((f) => normalizeSide(f.side) === "attack"),
-      remaining.filter((f) => normalizeSide(f.side) === "defence")
+    const remainingImages = images.filter((i) => i.id !== imageId);
+    if (!remainingImages.length) {
+      const remaining = groups.filter((g) => g.id !== groupId);
+      groups = mergeSideLists(
+        remaining.filter((g) => normalizeSide(g.side) === "attack"),
+        remaining.filter((g) => normalizeSide(g.side) === "defence")
+      );
+    } else {
+      groups[idx] = {
+        ...groups[idx],
+        images: reindexImageOrders(remainingImages),
+      };
+    }
+
+    if (dbRef) {
+      await persistMeta();
+    } else {
+      await persistMetaViaRest();
+    }
+    renderGroups();
+    setSyncStatus("live");
+  } catch (err) {
+    console.error("[strats remove image]", err);
+    setUploadError(formatUploadError(err), true);
+    setSyncStatus(
+      err?.code === "PERMISSION_DENIED" || err?.code === "storage/unauthorized"
+        ? "error-rules"
+        : "offline"
+    );
+  } finally {
+    resetUploadUi();
+  }
+}
+
+async function deleteGroup(group) {
+  if (!group?.id) return;
+  if (
+    !confirm(
+      `„${displayLabel(group)}" wirklich löschen? Alle Bilder werden entfernt. Das kann nicht rückgängig gemacht werden.`
+    )
+  ) {
+    return;
+  }
+
+  if (!useFirebase || !useStorage) return;
+
+  isUploading = true;
+  setSyncStatus("uploading");
+
+  try {
+    const images = getSortedImages(group);
+    if (storageRef) {
+      for (const image of images) {
+        if (!image.storagePath) continue;
+        await storageRef.child(image.storagePath).delete().catch((err) => {
+          if (err?.code !== "storage/object-not-found") throw err;
+        });
+      }
+    }
+
+    const remaining = groups.filter((g) => g.id !== group.id);
+    groups = mergeSideLists(
+      remaining.filter((g) => normalizeSide(g.side) === "attack"),
+      remaining.filter((g) => normalizeSide(g.side) === "defence")
     );
     if (dbRef) {
       await persistMeta();
     } else {
       await persistMetaViaRest();
     }
-    renderFiles();
+    renderGroups();
     setSyncStatus("live");
   } catch (err) {
     console.error("[strats delete]", err);
@@ -1598,8 +2508,8 @@ async function deleteFile(file) {
         : "offline"
     );
   } finally {
-    isUploading = false;
-    setFileInputEnabled(useStorage && !isFileProtocol());
+    if (lightboxGroupId === group.id) closeLightbox();
+    resetUploadUi();
   }
 }
 
@@ -1612,6 +2522,30 @@ async function retryFirebaseSync() {
   if (typeof firebase !== "undefined" && !dbRef) {
     initFirebaseSdk();
   }
+}
+
+function initStratsMapDelegation() {
+  const view = document.getElementById("stratsMapView");
+  if (!view || view.dataset.delegationBound === "1") return;
+  view.dataset.delegationBound = "1";
+
+  view.addEventListener("click", (e) => {
+    const delBtn = e.target.closest(".strats-file-card__delete");
+    if (delBtn) {
+      if (delBtn.disabled || isUploading) return;
+      const card = delBtn.closest(".strats-file-card");
+      const group = groups.find((g) => g.id === card?.dataset.id);
+      if (group) void deleteGroup(group);
+      return;
+    }
+    const addBtn = e.target.closest(".strats-file-card__add-images");
+    if (addBtn) {
+      if (addBtn.disabled || isUploading) return;
+      const card = addBtn.closest(".strats-file-card");
+      const groupId = card?.dataset.id;
+      if (groupId) triggerAddImagesToGroup(groupId);
+    }
+  });
 }
 
 function showInvalidMap() {
@@ -1640,6 +2574,7 @@ function initPage() {
   if (title) title.textContent = `Strats — ${mapLabel}`;
 
   initLightboxControls();
+  initStratsMapDelegation();
 
   const params = new URLSearchParams(window.location.search);
   if (params.get("debug") === "lightbox") {
@@ -1648,6 +2583,16 @@ function initPage() {
 
   document.getElementById("fileInput")?.addEventListener("change", (e) => {
     onFilesSelected(e.target.files);
+  });
+
+  document.getElementById("addImagesInput")?.addEventListener("change", (e) => {
+    onAddImagesSelected(e.target.files);
+  });
+
+  document.getElementById("mapSideToggle")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".strats-side-toggle__btn");
+    if (!btn?.dataset.side || btn.closest("#uploadSidePicker")) return;
+    setActiveSide(btn.dataset.side);
   });
 
   document.getElementById("uploadSidePicker")?.addEventListener("click", (e) => {
