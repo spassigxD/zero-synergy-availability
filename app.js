@@ -19,6 +19,8 @@ for (let h = 13; h <= 23; h++) {
 const STORAGE_KEY = "zero-synergy-availability-v1";
 const MIGRATION_KEY = "zero-synergy-firebase-migrated-v1";
 const FIREBASE_GRID_PATH = "teams/zero-synergy/grid";
+const FIREBASE_GRID_HISTORY_PATH = "teams/zero-synergy/gridHistory";
+const HISTORY_KEEP_DAYS = 14;
 const FIREBASE_SDK_TIMEOUT_MS = 5000;
 
 let selectedColor = "green";
@@ -33,6 +35,7 @@ let dbRef = null;
 let firebaseBootstrapped = false;
 let firebaseSdkTimer = null;
 let saveTimer = null;
+let historyTimer = null;
 /** Firebase writes stay off until the first remote snapshot is applied. */
 let remoteReady = false;
 let persistRetries = 0;
@@ -251,6 +254,72 @@ function persistGrid() {
       })
     );
   }
+  scheduleDailyHistory();
+}
+
+function berlinDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Berlin",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function gridSnapshotForHistory() {
+  const snap = {};
+  for (const [key, value] of Object.entries(grid)) {
+    if (isSafeCellKey(key) && CELL_COLORS.has(value)) snap[key] = value;
+  }
+  return snap;
+}
+
+function scheduleDailyHistory() {
+  if (!useFirebase || !remoteReady || deleteAllArmed || pendingReset) return;
+  clearTimeout(historyTimer);
+  historyTimer = setTimeout(() => {
+    saveDailyHistory().catch((err) => {
+      console.warn("[firebase] daily history failed", err?.message || err);
+    });
+  }, 1500);
+}
+
+async function saveDailyHistory() {
+  if (!useFirebase || !remoteReady || deleteAllArmed || pendingReset) return;
+  const snap = gridSnapshotForHistory();
+  const count = Object.keys(snap).length;
+  if (!count) return;
+
+  const day = berlinDateKey();
+  const url = `${firebaseRestBase()}/${FIREBASE_GRID_HISTORY_PATH}/${day}.json`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(snap),
+  });
+  if (!res.ok) {
+    throw new Error(`history_http_${res.status}`);
+  }
+  console.info("[firebase] saved daily availability", day, count);
+  await pruneOldHistory(day);
+}
+
+async function pruneOldHistory(today) {
+  const listUrl = `${firebaseRestBase()}/${FIREBASE_GRID_HISTORY_PATH}.json?shallow=true`;
+  const res = await fetch(listUrl);
+  if (!res.ok) return;
+  const data = await res.json();
+  if (!data || typeof data !== "object" || Array.isArray(data)) return;
+
+  const cutoff = berlinDateKey(new Date(Date.now() - HISTORY_KEEP_DAYS * 24 * 60 * 60 * 1000));
+  for (const dateKey of Object.keys(data)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || dateKey === today || dateKey > cutoff) continue;
+    const del = await fetch(
+      `${firebaseRestBase()}/${FIREBASE_GRID_HISTORY_PATH}/${dateKey}.json`,
+      { method: "DELETE" }
+    );
+    if (del.ok) console.info("[firebase] removed availability snapshot", dateKey);
+  }
 }
 
 let deleteAllQueued = false;
@@ -409,6 +478,7 @@ function applySnapshot(remote, { allowLocalMigration = false } = {}) {
       "[firebase] ignored unexpected empty grid snapshot; keeping current cells and not writing null"
     );
     remoteReady = true;
+    scheduleDailyHistory();
     if (allowLocalMigration && !sawRemoteCells && !localStorage.getItem(MIGRATION_KEY)) {
       for (const key of Object.keys(grid)) {
         if (isSafeCellKey(key) && CELL_COLORS.has(grid[key]) && !deleteKeys.has(key)) {
@@ -469,6 +539,7 @@ function applySnapshot(remote, { allowLocalMigration = false } = {}) {
   refreshAllCells();
   saveGridToLocalStorage();
   if (dirtyKeys.size || deleteKeys.size) schedulePersist();
+  scheduleDailyHistory();
   setSyncStatus("live");
 }
 

@@ -45,13 +45,20 @@ Tab **Regeln** → einfügen → **Veröffentlichen**:
           ".write": true
         },
         "$node": {
-          ".write": "$node != 'grid'"
+          ".write": "$node != 'grid' && $node != 'gridHistory'"
+        },
+        "gridHistory": {
+          ".read": true,
+          "$date": {
+            ".write": true,
+            ".validate": "$date.matches(/^\\d{4}-\\d{2}-\\d{2}$/) && (!newData.exists() || newData.hasChildren())"
+          }
         },
         "grid": {
           ".read": true,
           "$cell": {
             ".write": true,
-            ".validate": "$cell.matches(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\\|(1[3-9]|2[0-3]):00\\|(Fynn|Muchel|Bjarne|Lucas|Jona|Lukas)$/) && newData.isString() && (newData.val() == 'green' || newData.val() == 'yellow' || newData.val() == 'red')"
+            ".validate": "$cell.matches(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\\|(1[3-9]|2[0-3]):00\\|(Fynn|Muchel|Bjarne|Lucas|Jona|Lukas)$/) && (!newData.exists() || (newData.isString() && (newData.val() == 'green' || newData.val() == 'yellow' || newData.val() == 'red')))"
           }
         }
       }
@@ -62,7 +69,7 @@ Tab **Regeln** → einfügen → **Veröffentlichen**:
 
 Gleiche Regeln liegen im Repo als **`database.rules.json`** (`firebase deploy --only database`).
 
-Comps und Strats-Metadaten bleiben beschreibbar. Der Knoten `teams/zero-synergy/grid` selbst darf nicht ersetzt oder gelöscht werden; einzelne Zellen (`green` / `yellow` / `red`, oder eine Zelle auf null) schon. Nicht wieder `.write: true` auf den ganzen Team-Knoten setzen — das würde den Schutz aufheben.
+Comps und Strats-Metadaten bleiben beschreibbar. Der Knoten `teams/zero-synergy/grid` selbst darf nicht ersetzt oder gelöscht werden; einzelne Zellen (`green` / `yellow` / `red`, oder eine Zelle auf null) schon. `gridHistory/JJJJ-MM-TT` ist die Tageskopie der Availability und wird nach 14 Tagen von der App gelöscht. Nicht wieder `.write: true` auf den ganzen Team-Knoten setzen — das würde den Schutz aufheben.
 
 **Wichtig:** Der Firebase-**Testmodus** setzt oft zeitlich begrenzte Regeln (`now < …`). Nach Ablauf (~30 Tage) liefert die API **`Permission denied`** / die App zeigt **„Zugriff VERWEIGERT“**. Dann Regeln oben erneut einfügen und **Veröffentlichen** — Config und Pfad `teams/zero-synergy/` müssen dafür nicht geändert werden.
 

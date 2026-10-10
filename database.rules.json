@@ -10,7 +10,14 @@
           ".write": true
         },
         "$node": {
-          ".write": "$node != 'grid'"
+          ".write": "$node != 'grid' && $node != 'gridHistory'"
+        },
+        "gridHistory": {
+          ".read": true,
+          "$date": {
+            ".write": true,
+            ".validate": "$date.matches(/^\\d{4}-\\d{2}-\\d{2}$/) && (!newData.exists() || newData.hasChildren())"
+          }
         },
         "grid": {
           ".read": true,
