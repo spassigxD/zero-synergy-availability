@@ -33,7 +33,14 @@ let dbRef = null;
 let firebaseBootstrapped = false;
 let firebaseSdkTimer = null;
 let saveTimer = null;
-let lastPushedJson = null;
+/** Firebase writes stay off until the first remote snapshot is applied. */
+let remoteReady = false;
+let persistRetries = 0;
+const dirtyKeys = new Set();
+const deleteKeys = new Set();
+let writeQueue = Promise.resolve();
+/** "Alles zurücksetzen" clicked before the first snapshot arrived. */
+let pendingReset = false;
 
 function isFirebaseConfigured() {
   const c = window.FIREBASE_CONFIG;
@@ -69,12 +76,30 @@ function schedulePersist() {
   saveTimer = setTimeout(persistGrid, 150);
 }
 
-async function persistGridViaRest() {
+function playerFromCellKey(key) {
+  const parts = String(key).split("|");
+  return parts.length >= 3 ? parts.slice(2).join("|") : "";
+}
+
+function isCurrentPlayerKey(key) {
+  return PLAYERS.includes(playerFromCellKey(key));
+}
+
+function noteWriteSuccess() {
+  persistRetries = 0;
+  setSyncStatus("live");
+}
+
+function isPermissionDenied(err) {
+  return err?.code === "PERMISSION_DENIED" || err?.code === "permission_denied";
+}
+
+async function persistJson(method, body) {
   const url = `${firebaseRestBase()}/${FIREBASE_GRID_PATH}.json`;
   const res = await fetch(url, {
-    method: "PUT",
+    method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(grid),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = new Error(`http_${res.status}`);
@@ -83,34 +108,71 @@ async function persistGridViaRest() {
   }
 }
 
-function persistGrid() {
-  const json = JSON.stringify(grid);
-  saveGridToLocalStorage();
-
-  if (!useFirebase) return;
-
-  lastPushedJson = json;
-
-  const onWriteError = (err) => {
-    console.error("[firebase] write failed", err?.code, err?.message);
-    setSyncStatus(
-      err?.code === "PERMISSION_DENIED" ? "error-rules" : "offline-local"
-    );
-    persistGridViaRest()
-      .then(() => setSyncStatus("live"))
-      .catch((restErr) => {
-        console.error("[firebase] REST write failed", restErr?.code, restErr?.message);
-        setSyncStatus(
-          restErr?.code === "PERMISSION_DENIED" ? "error-rules" : "offline-local"
-        );
+function enqueueFirebaseWrite(work) {
+  const run = () =>
+    Promise.resolve()
+      .then(work)
+      .catch((err) => {
+        console.error("[firebase] write failed", err?.code, err?.message);
+        setSyncStatus(isPermissionDenied(err) ? "error-rules" : "offline-local");
       });
-  };
+  writeQueue = writeQueue.then(run, run);
+  return writeQueue;
+}
 
+/** Patch changed cells only. A full set/PUT would wipe every other cell. */
+function writePatch(patch) {
+  const viaRest = () => persistJson("PATCH", patch).then(noteWriteSuccess);
   if (dbRef) {
-    dbRef.set(grid).then(() => setSyncStatus("live")).catch(onWriteError);
-  } else {
-    persistGridViaRest().then(() => setSyncStatus("live")).catch(onWriteError);
+    return dbRef.update(patch).then(noteWriteSuccess).catch(() => viaRest());
   }
+  return viaRest();
+}
+
+function snapshotPatch() {
+  const patch = {};
+  for (const key of [...dirtyKeys]) {
+    if (!Object.prototype.hasOwnProperty.call(grid, key)) {
+      dirtyKeys.delete(key);
+      continue;
+    }
+    patch[key] = grid[key];
+    dirtyKeys.delete(key);
+  }
+  for (const key of [...deleteKeys]) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) patch[key] = null;
+    deleteKeys.delete(key);
+  }
+  return patch;
+}
+
+function restorePatch(patch) {
+  for (const [key, value] of Object.entries(patch)) {
+    if (value == null) deleteKeys.add(key);
+    else dirtyKeys.add(key);
+  }
+}
+
+function retryWrite(err, restore) {
+  restore();
+  if (isPermissionDenied(err) || persistRetries >= 2) return;
+  persistRetries += 1;
+  schedulePersist();
+}
+
+function persistGrid() {
+  saveGridToLocalStorage();
+  if (!useFirebase || !remoteReady) return;
+
+  const patch = snapshotPatch();
+  if (!Object.keys(patch).length) return;
+
+  enqueueFirebaseWrite(() =>
+    writePatch(patch).catch((err) => {
+      retryWrite(err, () => restorePatch(patch));
+      throw err;
+    })
+  );
 }
 
 function setRetryVisible(visible) {
@@ -170,12 +232,27 @@ function getCell(dayId, time, player) {
 
 function setCell(dayId, time, player, color) {
   const key = cellKey(dayId, time, player);
+  if (!PLAYERS.includes(player)) return;
   if (color) {
     grid[key] = color;
+    dirtyKeys.add(key);
+    deleteKeys.delete(key);
   } else {
     delete grid[key];
+    dirtyKeys.delete(key);
+    deleteKeys.add(key);
   }
+  persistRetries = 0;
   schedulePersist();
+}
+
+function clearCurrentPlayerCells() {
+  for (const key of Object.keys(grid)) {
+    if (!isCurrentPlayerKey(key)) continue;
+    delete grid[key];
+    dirtyKeys.delete(key);
+    deleteKeys.add(key);
+  }
 }
 
 function refreshAllCells() {
@@ -185,13 +262,69 @@ function refreshAllCells() {
   });
 }
 
-function applyRemoteGrid(remote) {
-  const json = JSON.stringify(remote || {});
-  if (json === lastPushedJson) return;
-  grid = remote && typeof remote === "object" ? remote : {};
+function overlayPendingEdits(cells) {
+  const next = cells && typeof cells === "object" && !Array.isArray(cells) ? { ...cells } : {};
+  for (const key of dirtyKeys) {
+    if (Object.prototype.hasOwnProperty.call(grid, key)) next[key] = grid[key];
+    else delete next[key];
+  }
+  for (const key of deleteKeys) delete next[key];
+  return next;
+}
+
+function applySnapshot(remote, { allowLocalMigration = false } = {}) {
+  if (Array.isArray(remote)) {
+    remoteReady = true;
+    setSyncStatus("live");
+    return;
+  }
+
+  const remoteCells = remote && typeof remote === "object" ? remote : {};
+  const empty = Object.keys(remoteCells).length === 0;
+  let next = overlayPendingEdits(remoteCells);
+
+  if (
+    allowLocalMigration &&
+    empty &&
+    !pendingReset &&
+    !localStorage.getItem(MIGRATION_KEY)
+  ) {
+    const localGrid = loadGridFromLocalStorage();
+    if (
+      localGrid &&
+      typeof localGrid === "object" &&
+      !Array.isArray(localGrid) &&
+      Object.keys(localGrid).length
+    ) {
+      next = { ...localGrid, ...next };
+      for (const key of Object.keys(localGrid)) {
+        if (!deleteKeys.has(key)) dirtyKeys.add(key);
+      }
+      localStorage.setItem(MIGRATION_KEY, "1");
+    }
+  }
+
+  if (pendingReset) {
+    pendingReset = false;
+    for (const key of Object.keys(next)) {
+      if (!isCurrentPlayerKey(key)) continue;
+      delete next[key];
+      dirtyKeys.delete(key);
+      deleteKeys.add(key);
+    }
+  }
+
+  grid = next;
+  remoteReady = true;
+  if (!empty) localStorage.setItem(MIGRATION_KEY, "1");
   refreshAllCells();
   saveGridToLocalStorage();
+  if (dirtyKeys.size || deleteKeys.size) schedulePersist();
   setSyncStatus("live");
+}
+
+function applyRemoteGrid(remote) {
+  applySnapshot(remote);
 }
 
 function buildSchedule() {
@@ -395,22 +528,7 @@ async function fetchGridViaRest() {
 }
 
 function applyInitialRemoteGrid(remote) {
-  const remoteGrid = remote && typeof remote === "object" ? remote : {};
-  const hasRemote = Object.keys(remoteGrid).length > 0;
-  const localGrid = loadGridFromLocalStorage();
-  const hasLocal = Object.keys(localGrid).length > 0;
-  const migrated = localStorage.getItem(MIGRATION_KEY);
-
-  if (!hasRemote && hasLocal && !migrated) {
-    grid = { ...localGrid };
-    localStorage.setItem(MIGRATION_KEY, "1");
-    persistGrid();
-  } else {
-    grid = remoteGrid;
-    if (hasRemote) localStorage.setItem(MIGRATION_KEY, "1");
-  }
-  refreshAllCells();
-  saveGridToLocalStorage();
+  applySnapshot(remote, { allowLocalMigration: true });
 }
 
 function clearFirebaseSdkTimer() {
@@ -524,6 +642,7 @@ function getFirebaseApp() {
 function initFirebase() {
   useFirebase = true;
   firebaseBootstrapped = false;
+  remoteReady = false;
   setBannerVisible(false);
   setSyncStatus("loading");
 
@@ -541,6 +660,7 @@ async function retryFirebaseSync() {
   if (!isFirebaseConfigured()) return;
   setSyncStatus("loading");
   firebaseBootstrapped = false;
+  remoteReady = false;
   clearFirebaseSdkTimer();
   if (dbRef) {
     try {
@@ -573,9 +693,11 @@ document.getElementById("resetAll").addEventListener("click", () => {
   ) {
     return;
   }
-  grid = {};
-  persistGrid();
-  buildSchedule();
+  pendingReset = useFirebase && !remoteReady;
+  clearCurrentPlayerCells();
+  persistRetries = 0;
+  refreshAllCells();
+  schedulePersist();
 });
 
 document.getElementById("retrySync")?.addEventListener("click", () => {
@@ -589,4 +711,4 @@ document.addEventListener("touchmove", onTouchMove, { passive: false });
 
 initColorPalette();
 initSync();
-
+
