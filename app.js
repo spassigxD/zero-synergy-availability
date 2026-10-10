@@ -41,6 +41,15 @@ const deleteKeys = new Set();
 let writeQueue = Promise.resolve();
 /** "Alles zurücksetzen" clicked before the first snapshot arrived. */
 let pendingReset = false;
+/**
+ * Set only by the confirmed Alles-löschen button.
+ * Multi-cell clears must see this flag; they must not infer it.
+ */
+let deleteAllArmed = false;
+/** This session has applied a remote snapshot that contained cells. */
+let sawRemoteCells = false;
+
+const CELL_COLORS = new Set(["green", "yellow", "red"]);
 
 function isFirebaseConfigured() {
   const c = window.FIREBASE_CONFIG;
@@ -76,15 +85,6 @@ function schedulePersist() {
   saveTimer = setTimeout(persistGrid, 150);
 }
 
-function playerFromCellKey(key) {
-  const parts = String(key).split("|");
-  return parts.length >= 3 ? parts.slice(2).join("|") : "";
-}
-
-function isCurrentPlayerKey(key) {
-  return PLAYERS.includes(playerFromCellKey(key));
-}
-
 function noteWriteSuccess() {
   persistRetries = 0;
   setSyncStatus("live");
@@ -94,13 +94,41 @@ function isPermissionDenied(err) {
   return err?.code === "PERMISSION_DENIED" || err?.code === "permission_denied";
 }
 
-async function persistJson(method, body) {
-  const url = `${firebaseRestBase()}/${FIREBASE_GRID_PATH}.json`;
-  const res = await fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+function isSingleSegmentKey(key) {
+  return typeof key === "string" && key.length > 0 && !/[.#$[\]/]/.test(key);
+}
+
+function isSafeCellKey(key) {
+  if (!isSingleSegmentKey(key)) return false;
+  const parts = key.split("|");
+  if (parts.length !== 3) return false;
+  const [day, time, player] = parts;
+  if (!DAYS.some((d) => d.id === day)) return false;
+  if (!TIMES.includes(time)) return false;
+  if (!PLAYERS.includes(player)) return false;
+  return true;
+}
+
+function cellLeafUrl(key) {
+  return `${firebaseRestBase()}/${FIREBASE_GRID_PATH}/${encodeURIComponent(key)}.json`;
+}
+
+async function writeCellLeafRest(key, value) {
+  const url = cellLeafUrl(key);
+  const parentUrl = `${firebaseRestBase()}/${FIREBASE_GRID_PATH}.json`;
+  if (!isSingleSegmentKey(key) || !url || url === parentUrl) {
+    throw new Error("refused_parent_grid_write");
+  }
+  const res = await fetch(
+    url,
+    value == null
+      ? { method: "DELETE" }
+      : {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(value),
+        }
+  );
   if (!res.ok) {
     const err = new Error(`http_${res.status}`);
     err.code = res.status === 401 || res.status === 403 ? "PERMISSION_DENIED" : "HTTP_ERROR";
@@ -120,13 +148,60 @@ function enqueueFirebaseWrite(work) {
   return writeQueue;
 }
 
-/** Patch changed cells only. A full set/PUT would wipe every other cell. */
-function writePatch(patch) {
-  const viaRest = () => persistJson("PATCH", patch).then(noteWriteSuccess);
-  if (dbRef) {
-    return dbRef.update(patch).then(noteWriteSuccess).catch(() => viaRest());
+/**
+ * Write exactly one cell leaf (teams/zero-synergy/grid/{day|hour|player}).
+ * Never set, update, or remove the parent grid node or a whole day.
+ */
+function writeCellLeaf(key, value) {
+  if (typeof key !== "string" || !isSingleSegmentKey(key)) {
+    console.error("[firebase] refused grid write that is not a single cell", key);
+    return Promise.resolve();
+  }
+  if (value == null) {
+    /* one cell cleared */
+  } else if (!CELL_COLORS.has(value) || !isSafeCellKey(key)) {
+    console.error("[firebase] refused invalid cell write", key, value);
+    return Promise.resolve();
+  }
+
+  const viaRest = () => writeCellLeafRest(key, value).then(noteWriteSuccess);
+  if (typeof firebase !== "undefined" && firebase.apps && firebase.apps.length) {
+    try {
+      const leaf = firebase.database().ref(FIREBASE_GRID_PATH).child(key);
+      const op = value == null ? leaf.remove() : leaf.set(value);
+      return op.then(noteWriteSuccess).catch(() => viaRest());
+    } catch (err) {
+      console.warn("[firebase] leaf write via SDK failed, trying REST", err);
+      return viaRest();
+    }
   }
   return viaRest();
+}
+
+/**
+ * Null or replace more than one cell. Refuses unless the caller passes
+ * fromDeleteAllButton: true — only the confirmed Alles-löschen button does that.
+ * Each cell is still its own leaf write — the parent grid is never set or removed.
+ */
+function commitCellWrites(entries, { fromDeleteAllButton = false } = {}) {
+  if (!Array.isArray(entries) || entries.length === 0) return Promise.resolve();
+  if (entries.length > 1 && (fromDeleteAllButton !== true || deleteAllArmed !== true)) {
+    console.error(
+      "[firebase] refused multi-cell grid write; only Alles löschen may change more than one cell"
+    );
+    return Promise.reject(new Error("refused_multi_cell_grid_write"));
+  }
+  let chain = Promise.resolve();
+  for (const entry of entries) {
+    const key = entry && entry[0];
+    const value = entry && entry[1];
+    if (entries.length > 1 && value != null) {
+      console.error("[firebase] Alles löschen only clears individual cells");
+      return chain;
+    }
+    chain = chain.then(() => writeCellLeaf(key, value == null ? null : value));
+  }
+  return chain;
 }
 
 function snapshotPatch() {
@@ -162,17 +237,71 @@ function retryWrite(err, restore) {
 
 function persistGrid() {
   saveGridToLocalStorage();
-  if (!useFirebase || !remoteReady) return;
+  if (!useFirebase || !remoteReady || deleteAllArmed) return;
 
   const patch = snapshotPatch();
-  if (!Object.keys(patch).length) return;
+  const entries = Object.entries(patch);
+  if (!entries.length) return;
 
-  enqueueFirebaseWrite(() =>
-    writePatch(patch).catch((err) => {
-      retryWrite(err, () => restorePatch(patch));
+  for (const [key, value] of entries) {
+    enqueueFirebaseWrite(() =>
+      commitCellWrites([[key, value]]).catch((err) => {
+        retryWrite(err, () => restorePatch({ [key]: value }));
+        throw err;
+      })
+    );
+  }
+}
+
+let deleteAllQueued = false;
+
+function enqueueDeleteAll(keys) {
+  if (deleteAllArmed !== true && pendingReset !== true) {
+    console.error("[firebase] refused delete-all; Alles löschen was not confirmed");
+    return;
+  }
+  const unique = [...new Set(keys.filter(isSingleSegmentKey))];
+  if (!unique.length) {
+    if (!deleteAllQueued) {
+      deleteAllArmed = false;
+      pendingReset = false;
+    }
+    return;
+  }
+  if (deleteAllQueued) return;
+  deleteAllQueued = true;
+  enqueueFirebaseWrite(async () => {
+    try {
+      await commitCellWrites(
+        unique.map((key) => [key, null]),
+        { fromDeleteAllButton: true }
+      );
+      try {
+        const remote = await fetchGridViaRest();
+        const left =
+          remote && typeof remote === "object" && !Array.isArray(remote)
+            ? Object.keys(remote).filter(isSingleSegmentKey)
+            : [];
+        if (left.length) {
+          await commitCellWrites(
+            left.map((key) => [key, null]),
+            { fromDeleteAllButton: true }
+          );
+        }
+      } catch (err) {
+        console.warn("[firebase] delete-all reread failed", err?.message || err);
+      }
+      deleteAllArmed = false;
+      pendingReset = false;
+      noteWriteSuccess();
+    } catch (err) {
+      deleteAllArmed = false;
+      pendingReset = false;
       throw err;
-    })
-  );
+    } finally {
+      deleteAllQueued = false;
+    }
+  });
 }
 
 function setRetryVisible(visible) {
@@ -209,7 +338,7 @@ function setSyncStatus(mode) {
     el.textContent = "Zugriff VERWEIGERT";
     el.classList.add("sync-status--offline");
     el.title =
-      "Realtime-Database-Regeln blockieren den Zugriff (oft abgelaufener Testmodus). Console → Realtime Database → Regeln → teams/zero-synergy mit .read/.write true → Veröffentlichen. Siehe SETUP-FIREBASE.md. Danach „Erneut verbinden“.";
+      "Realtime-Database-Regeln blockieren den Zugriff (oft abgelaufener Testmodus). Console → Realtime Database → Regeln → Inhalt aus database.rules.json → Veröffentlichen. Der Grid-Knoten selbst bleibt gesperrt; einzelne Zellen dürfen geschrieben werden. Danach „Erneut verbinden“.";
     setRetryVisible(true);
   } else if (mode === "local") {
     el.textContent = "Nur lokal";
@@ -246,15 +375,6 @@ function setCell(dayId, time, player, color) {
   schedulePersist();
 }
 
-function clearCurrentPlayerCells() {
-  for (const key of Object.keys(grid)) {
-    if (!isCurrentPlayerKey(key)) continue;
-    delete grid[key];
-    dirtyKeys.delete(key);
-    deleteKeys.add(key);
-  }
-}
-
 function refreshAllCells() {
   document.querySelectorAll(".schedule-cell").forEach((cell) => {
     const { day, time, player } = cell.dataset;
@@ -280,15 +400,49 @@ function applySnapshot(remote, { allowLocalMigration = false } = {}) {
   }
 
   const remoteCells = remote && typeof remote === "object" ? remote : {};
-  const empty = Object.keys(remoteCells).length === 0;
+  const remoteCount = Object.keys(remoteCells).length;
+  const localCount = Object.keys(grid).length;
+  const acceptingEmpty = deleteAllArmed || pendingReset;
+
+  if (remoteCount === 0 && localCount > 0 && !acceptingEmpty) {
+    console.warn(
+      "[firebase] ignored unexpected empty grid snapshot; keeping current cells and not writing null"
+    );
+    remoteReady = true;
+    if (allowLocalMigration && !sawRemoteCells && !localStorage.getItem(MIGRATION_KEY)) {
+      for (const key of Object.keys(grid)) {
+        if (isSafeCellKey(key) && CELL_COLORS.has(grid[key]) && !deleteKeys.has(key)) {
+          dirtyKeys.add(key);
+        }
+      }
+      localStorage.setItem(MIGRATION_KEY, "1");
+      schedulePersist();
+    }
+    setSyncStatus("live");
+    return;
+  }
+
+  if (acceptingEmpty) {
+    const remoteKeys = Object.keys(remoteCells).filter(isSingleSegmentKey);
+    grid = {};
+    dirtyKeys.clear();
+    deleteKeys.clear();
+    remoteReady = true;
+    refreshAllCells();
+    saveGridToLocalStorage();
+    if (remoteKeys.length && useFirebase) {
+      enqueueDeleteAll(remoteKeys);
+    } else if (!deleteAllQueued) {
+      deleteAllArmed = false;
+      pendingReset = false;
+    }
+    setSyncStatus("live");
+    return;
+  }
+
   let next = overlayPendingEdits(remoteCells);
 
-  if (
-    allowLocalMigration &&
-    empty &&
-    !pendingReset &&
-    !localStorage.getItem(MIGRATION_KEY)
-  ) {
+  if (allowLocalMigration && remoteCount === 0 && !localStorage.getItem(MIGRATION_KEY)) {
     const localGrid = loadGridFromLocalStorage();
     if (
       localGrid &&
@@ -298,25 +452,20 @@ function applySnapshot(remote, { allowLocalMigration = false } = {}) {
     ) {
       next = { ...localGrid, ...next };
       for (const key of Object.keys(localGrid)) {
-        if (!deleteKeys.has(key)) dirtyKeys.add(key);
+        if (!deleteKeys.has(key) && isSafeCellKey(key) && CELL_COLORS.has(localGrid[key])) {
+          dirtyKeys.add(key);
+        }
       }
       localStorage.setItem(MIGRATION_KEY, "1");
     }
   }
 
-  if (pendingReset) {
-    pendingReset = false;
-    for (const key of Object.keys(next)) {
-      if (!isCurrentPlayerKey(key)) continue;
-      delete next[key];
-      dirtyKeys.delete(key);
-      deleteKeys.add(key);
-    }
-  }
-
   grid = next;
   remoteReady = true;
-  if (!empty) localStorage.setItem(MIGRATION_KEY, "1");
+  if (remoteCount > 0) {
+    sawRemoteCells = true;
+    localStorage.setItem(MIGRATION_KEY, "1");
+  }
   refreshAllCells();
   saveGridToLocalStorage();
   if (dirtyKeys.size || deleteKeys.size) schedulePersist();
@@ -524,7 +673,8 @@ async function fetchGridViaRest() {
     throw err;
   }
   const data = await res.json();
-  return data && typeof data === "object" ? data : {};
+  if (data == null) return null;
+  return typeof data === "object" ? data : null;
 }
 
 function applyInitialRemoteGrid(remote) {
@@ -608,6 +758,7 @@ function initFirebaseSdk() {
   try {
     const app = getFirebaseApp();
     const db = firebase.database(app);
+    // Listen only. Writes go through writeCellLeaf() on one child path.
     dbRef = db.ref(FIREBASE_GRID_PATH);
 
     db.ref(".info/connected").on("value", (snap) => {
@@ -693,11 +844,23 @@ document.getElementById("resetAll").addEventListener("click", () => {
   ) {
     return;
   }
+  clearTimeout(saveTimer);
+  deleteAllArmed = true;
   pendingReset = useFirebase && !remoteReady;
-  clearCurrentPlayerCells();
+  const keys = Object.keys(grid).filter(isSingleSegmentKey);
+  grid = {};
+  dirtyKeys.clear();
+  deleteKeys.clear();
   persistRetries = 0;
   refreshAllCells();
-  schedulePersist();
+  saveGridToLocalStorage();
+  if (!useFirebase) {
+    deleteAllArmed = false;
+    pendingReset = false;
+    return;
+  }
+  if (!remoteReady) return;
+  enqueueDeleteAll(keys);
 });
 
 document.getElementById("retrySync")?.addEventListener("click", () => {

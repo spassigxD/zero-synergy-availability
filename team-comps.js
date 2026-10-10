@@ -414,7 +414,7 @@ function setSyncStatus(mode) {
     el.textContent = "Zugriff VERWEIGERT";
     el.classList.add("sync-status--offline");
     el.title =
-      "Realtime-Database-Regeln blockieren den Zugriff (oft abgelaufener Testmodus). Console → Realtime Database → Regeln → teams/zero-synergy mit .read/.write true → Veröffentlichen. Siehe SETUP-FIREBASE.md. Danach „Erneut verbinden“.";
+      "Realtime-Database-Regeln blockieren den Zugriff (oft abgelaufener Testmodus). Console → Realtime Database → Regeln → Inhalt aus database.rules.json → Veröffentlichen. Nicht .write auf den ganzen Team-Knoten setzen (das würde das Availability-Grid wieder löschbar machen). Danach „Erneut verbinden“.";
     setRetryVisible(true);
   } else if (mode === "local") {
     el.textContent = "Nur lokal";

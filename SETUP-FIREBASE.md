@@ -38,7 +38,22 @@ Tab **Regeln** → einfügen → **Veröffentlichen**:
     "teams": {
       "zero-synergy": {
         ".read": true,
-        ".write": true
+        "comps": {
+          ".write": true
+        },
+        "strats-meta": {
+          ".write": true
+        },
+        "$node": {
+          ".write": "$node != 'grid'"
+        },
+        "grid": {
+          ".read": true,
+          "$cell": {
+            ".write": true,
+            ".validate": "$cell.matches(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\\|(1[3-9]|2[0-3]):00\\|(Fynn|Muchel|Bjarne|Lucas|Jona|Lukas)$/) && newData.isString() && (newData.val() == 'green' || newData.val() == 'yellow' || newData.val() == 'red')"
+          }
+        }
       }
     }
   }
@@ -47,7 +62,7 @@ Tab **Regeln** → einfügen → **Veröffentlichen**:
 
 Gleiche Regeln liegen im Repo als **`database.rules.json`** (`firebase deploy --only database`).
 
-Jeder mit dem Link kann lesen/schreiben — für ein kleines Team mit privatem Link oft ausreichend.
+Comps und Strats-Metadaten bleiben beschreibbar. Der Knoten `teams/zero-synergy/grid` selbst darf nicht ersetzt oder gelöscht werden; einzelne Zellen (`green` / `yellow` / `red`, oder eine Zelle auf null) schon. Nicht wieder `.write: true` auf den ganzen Team-Knoten setzen — das würde den Schutz aufheben.
 
 **Wichtig:** Der Firebase-**Testmodus** setzt oft zeitlich begrenzte Regeln (`now < …`). Nach Ablauf (~30 Tage) liefert die API **`Permission denied`** / die App zeigt **„Zugriff VERWEIGERT“**. Dann Regeln oben erneut einfügen und **Veröffentlichen** — Config und Pfad `teams/zero-synergy/` müssen dafür nicht geändert werden.
 

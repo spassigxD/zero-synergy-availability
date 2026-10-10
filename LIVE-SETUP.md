@@ -4,7 +4,7 @@ Kurz erklärt, was die Meldungen auf **https://spassigxd.github.io/bek-otto-lost
 
 ## „Zugriff VERWEIGERT“ / Availability nicht live
 
-**Ursache:** Die Realtime-Database-Regeln blockieren Lesen/Schreiben (sehr oft: **Testmodus abgelaufen** nach ~30 Tagen). Config und Pfad `teams/zero-synergy/…` sind korrekt — ohne veröffentlichte offene Regeln liefert Firebase `Permission denied` (HTTP 401).
+**Ursache:** Die Realtime-Database-Regeln blockieren Lesen/Schreiben (sehr oft: **Testmodus abgelaufen** nach ~30 Tagen). Config und Pfad `teams/zero-synergy/…` sind korrekt — ohne veröffentlichte Regeln liefert Firebase `Permission denied` (HTTP 401).
 
 **Sofort-Fix in der Firebase Console (Pflicht):**
 
@@ -18,12 +18,29 @@ Kurz erklärt, was die Meldungen auf **https://spassigxd.github.io/bek-otto-lost
     "teams": {
       "zero-synergy": {
         ".read": true,
-        ".write": true
+        "comps": {
+          ".write": true
+        },
+        "strats-meta": {
+          ".write": true
+        },
+        "$node": {
+          ".write": "$node != 'grid'"
+        },
+        "grid": {
+          ".read": true,
+          "$cell": {
+            ".write": true,
+            ".validate": "$cell.matches(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\\|(1[3-9]|2[0-3]):00\\|(Fynn|Muchel|Bjarne|Lucas|Jona|Lukas)$/) && newData.isString() && (newData.val() == 'green' || newData.val() == 'yellow' || newData.val() == 'red')"
+          }
+        }
       }
     }
   }
 }
 ```
+
+Nicht `.write: true` auf ganz `teams/zero-synergy` setzen. Das würde erlauben, das Availability-Grid auf einmal zu löschen.
 
 4. Oben rechts **Veröffentlichen** klicken (ohne das bleibt alles gesperrt).
 5. Live-Seite hart neu laden (**Strg+F5**) → Status sollte **„Live · synchronisiert“** zeigen. Sonst **„Erneut verbinden“**.
